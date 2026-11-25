@@ -1,0 +1,192 @@
+{
+  "pages": {
+    "111": {
+      "id": "page_1795598198802_rd1ty",
+      "code": "111",
+      "title": "111",
+      "content": "orbit drift jasmin fable canyon ripple nectar vale lantern elm ember drift lantern blossom delta olive drift crest zephyr vale dawn canyon hazel jasmin apple umber elm ridge jasmin timber blossom ridge nectar lantern whistle meadow tundra solstice horizon falcon iris tide prism whistle kernel wind lotus utopia yarrow ivory falcon delta lotus kernel delta meadow whistle jasmin iris utopia umber valley tundra anchor island juniper velvet tide fable umber jade whistle island crest canyon pebble harbor delta ember oasis beacon island ivory blossom oasis blossom nova acorn iris saffron horizon ripple fable crest tide horizon elm beacon utopia canyon ripple pine nova lantern glacier orbit timber umber elm ivory zenith whistle jade stone grove wind breeze orbit tide island ridge orbit lotus fern umber iris apple horizon olive willow olive nectar marble olive zephyr timber valley umber vale stone",
+      "mode": "rich",
+      "is_encrypted": false,
+      "encryption_salt": null,
+      "read_token": "6cl4v0er",
+      "edit_token": "izr9gv0vj0",
+      "expires_at": null,
+      "burn_after_reading": false,
+      "views_count": 10,
+      "created_at": 1795598198802,
+      "updated_at": 1795600025371
+    },
+    "1212": {
+      "id": "page_demo_1212",
+      "code": "1212",
+      "title": "3D Production Master Pad",
+      "content": "",
+      "mode": "rich",
+      "is_encrypted": false,
+      "read_token": "read_demo_1212",
+      "edit_token": "edit_demo_1212",
+      "expires_at": null,
+      "burn_after_reading": false,
+      "views_count": 31,
+      "created_at": 1774510000000,
+      "updated_at": 1795596461531,
+      "encryption_salt": null
+    },
+    "jack-3d": {
+      "id": "page_demo_jack",
+      "code": "jack-3d",
+      "title": "Jack - 3D Creator Lab Notes",
+      "content": "# Jack's 3D Studio Notes\n\nDriven by crafting striking and unforgettable visual projects across gaming, interactive web, and product branding.\n\n### Featured Capabilities:\n- **3D Modeling & Sculpting**: Characters, hard-surface props, architectural spaces\n- **Photorealistic Rendering**: Octane, Redshift, Cycles with customized PBR materials\n- **Motion Graphics**: Dynamic simulation, particle systems, procedural animation",
+      "mode": "rich",
+      "is_encrypted": false,
+      "read_token": "read_jack",
+      "edit_token": "edit_jack",
+      "expires_at": null,
+      "burn_after_reading": false,
+      "views_count": 8,
+      "created_at": 1774510000000,
+      "updated_at": 1774512000000
+    },
+    "test-code": {
+      "id": "page_1795595460917_gil48",
+      "code": "test-code",
+      "title": "Test Code Page",
+      "content": "Testing autosave and collaborative sync in Padly.",
+      "mode": "markdown",
+      "is_encrypted": false,
+      "read_token": "3ualvthm",
+      "edit_token": "zoeh4yzo7q",
+      "expires_at": null,
+      "burn_after_reading": false,
+      "views_count": 1,
+      "created_at": 1795595460917,
+      "updated_at": 1795595460917
+    }
+  },
+  "versions": {
+    "111": [
+      {
+        "id": "ver_1795600025372_4n5z",
+        "page_code": "111",
+        "content": "",
+        "mode": "rich",
+        "created_at": 1795600025372,
+        "summary": "Auto-saved version"
+      },
+      {
+        "id": "ver_1795598198802_bt6j",
+        "page_code": "111",
+        "content": " vvv",
+        "mode": "rich",
+        "created_at": 1795598198802,
+        "summary": "Initial version"
+      }
+    ],
+    "1212": [
+      {
+        "id": "ver_1795596461531_u3oz",
+        "page_code": "1212",
+        "content": "Live Rendered Preview",
+        "mode": "rich",
+        "created_at": 1795596461531,
+        "summary": "Auto-saved version"
+      },
+      {
+        "id": "ver_1795596459981_9gy2",
+        "page_code": "1212",
+        "content": "",
+        "mode": "rich",
+        "created_at": 1795596459981,
+        "summary": "Auto-saved version"
+      },
+      {
+        "id": "ver_1795596458146_cizd",
+        "page_code": "1212",
+        "content": "vffffffffffffffffff",
+        "mode": "rich",
+        "created_at": 1795596458146,
+        "summary": "Auto-saved version"
+      },
+      {
+        "id": "ver_1795596457101_mmmb",
+        "page_code": "1212",
+        "content": "",
+        "mode": "markdown",
+        "created_at": 1795596457101,
+        "summary": "Auto-saved version"
+      },
+      {
+        "id": "ver_1795596065196_f66t",
+        "page_code": "1212",
+        "content": "# Welcome to Padly (#1212)\n\n> Zero signup. Shared by t\n> Quote\nyping code \"1212\". Real-time synchronization active.\n\n- [ ] Task\n\n1. Item\n\n## 🚀 Project Overview\nWe are building next-generation photorealistic 3D \n> Quote\nenvironments, digital assets, and high-fidelity motion sequences for upcoming launch campaigns.\n\n### 🎯 Action Checklist\n- [x] Finalize lighting setup for product renders\n- [x] Export low-poly GLTF models for web interactives\n- [ ] Review ambient occlusion maps\n- [ ] Deliver high-res turntable animations\n\n```typescript\n// 3D Scene Config Sample\ninterface ScenePipeline {\n  engine: 'UnrealEngine5' | 'Blender' | 'ThreeJS';\n  samples: 4096;\n  denoiser: 'OptiX';\n  colorSpace: 'ACEScg';\n}\n```\n\n*Drag and drop your audio tracks, video clips, and screenshots anywhere onto this pad to attach them instantly!*",
+        "mode": "markdown",
+        "created_at": 1795596065196,
+        "summary": "Auto-saved version"
+      },
+      {
+        "id": "ver_1795596004449_h2tj",
+        "page_code": "1212",
+        "content": "# Welcome to Padly (#1212)\n\n> Zero signup. Shared by typing code \"1212\". Real-time synchronization active.\n\n1. Item\n\n## 🚀 Project Overview\nWe are building next-generation photorealistic 3D environments, digital assets, and high-fidelity motion sequences for upcoming launch campaigns.\n\n### 🎯 Action Checklist\n- [x] Finalize lighting setup for product renders\n- [x] Export low-poly GLTF models for web interactives\n- [ ] Review ambient occlusion maps\n- [ ] Deliver high-res turntable animations\n\n```typescript\n// 3D Scene Config Sample\ninterface ScenePipeline {\n  engine: 'UnrealEngine5' | 'Blender' | 'ThreeJS';\n  samples: 4096;\n  denoiser: 'OptiX';\n  colorSpace: 'ACEScg';\n}\n```\n\n*Drag and drop your audio tracks, video clips, and screenshots anywhere onto this pad to attach them instantly!*",
+        "mode": "markdown",
+        "created_at": 1795596004449,
+        "summary": "Auto-saved version"
+      },
+      {
+        "id": "ver_initial_1212",
+        "page_code": "1212",
+        "content": "# Initial Draft - 3D Production Master Pad",
+        "mode": "markdown",
+        "created_at": 1774510000000,
+        "summary": "Initial seed draft"
+      }
+    ],
+    "test-code": [
+      {
+        "id": "ver_1795595460918_0kmd",
+        "page_code": "test-code",
+        "content": "Testing autosave and collaborative sync in Padly.",
+        "mode": "markdown",
+        "created_at": 1795595460918,
+        "summary": "Initial version"
+      }
+    ]
+  },
+  "files": {
+    "111": [
+      {
+        "id": "file_1795598144952_o28r",
+        "page_code": "111",
+        "filename": "converted_images_1795598138365.pdf",
+        "stored_name": "file_1795598144946_4z72dw.pdf",
+        "mime_type": "application/pdf",
+        "size": 88814,
+        "url": "/uploads/file_1795598144946_4z72dw.pdf",
+        "created_at": 1795598144952
+      }
+    ]
+  },
+  "chats": {
+    "111": [
+      {
+        "id": "msg_1795598921542_ueh8",
+        "page_code": "111",
+        "sender_id": "user-a",
+        "sender_name": "Friend A",
+        "color": "#00A8B6",
+        "text": "Hey friend! I am joining code 111 from home!",
+        "timestamp": 1795598921542
+      }
+    ],
+    "1212": [
+      {
+        "id": "msg_1795602664410_gdkw",
+        "page_code": "1212",
+        "sender_id": "lki0vmg",
+        "sender_name": "Me",
+        "color": "#7621B0",
+        "text": "hi",
+        "timestamp": 1795602664410
+      }
+    ]
+  }
+}
