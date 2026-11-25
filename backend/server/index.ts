@@ -83,7 +83,17 @@ function broadcastToRoom(code: string, message: any, excludeWs?: WebSocket) {
 
 function broadcastPresence(code: string) {
   const room = rooms.get(code);
-  const count = room ? room.size : 0;
+  if (!room) {
+    broadcastToRoom(code, { type: 'presence', count: 0, viewers: 0 });
+    return;
+  }
+  const uniqueClients = new Set<string>();
+  for (const meta of room) {
+    if (meta.ws.readyState === WebSocket.OPEN && meta.clientId) {
+      uniqueClients.add(meta.clientId);
+    }
+  }
+  const count = uniqueClients.size;
   broadcastToRoom(code, {
     type: 'presence',
     count,
@@ -116,11 +126,19 @@ wss.on('connection', (ws) => {
           }
         }
 
-        currentMeta = { ws, code, clientId, clientColor: color };
         if (!rooms.has(code)) {
           rooms.set(code, new Set());
         }
-        rooms.get(code)!.add(currentMeta);
+        const roomSet = rooms.get(code)!;
+        // Purge any stale duplicate connection from the exact same clientId
+        for (const existing of roomSet) {
+          if (existing.clientId === clientId && existing.ws !== ws) {
+            try { existing.ws.close(); } catch {}
+            roomSet.delete(existing);
+          }
+        }
+        currentMeta = { ws, code, clientId, clientColor: color };
+        roomSet.add(currentMeta);
 
         // Send welcome
         ws.send(JSON.stringify({

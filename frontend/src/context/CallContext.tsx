@@ -334,6 +334,13 @@ export const CallProvider: React.FC<CallProviderProps> = ({
     // Track arrival handler
     pc.ontrack = (event) => {
       const incomingStream = event.streams[0];
+      try {
+        const audio = new Audio();
+        audio.srcObject = incomingStream;
+        audio.autoplay = true;
+        audio.play().catch(e => console.warn('Audio play notice:', e));
+      } catch (ae) {}
+
       setParticipants(prev => {
         const existing = prev.find(p => p.id === peerId);
         if (existing) {
@@ -396,6 +403,17 @@ export const CallProvider: React.FC<CallProviderProps> = ({
 
           // 1. Incoming Call Request
           if (signalType === 'call_request') {
+            if (callState === 'calling') {
+              // Both clicked call: break tie cleanly by comparing clientId
+              if (clientId < from) {
+                setCallerName(fromName || 'Friend');
+                setCallMode(incomingMode || 'video');
+                acceptCall();
+                return;
+              } else {
+                return; // Let other peer auto-accept
+              }
+            }
             setCallerName(fromName || 'Friend');
             setCallMode(incomingMode || 'video');
             setCallState('incoming');
@@ -405,7 +423,21 @@ export const CallProvider: React.FC<CallProviderProps> = ({
           else if (signalType === 'call_accept') {
             setCallState('connected');
             const pc = getOrCreatePeerConnection(from, fromName, fromColor);
-            const offer = await pc.createOffer();
+
+            // Ensure local tracks are attached to pc
+            if (localStreamRef.current) {
+              const senders = pc.getSenders();
+              localStreamRef.current.getTracks().forEach(track => {
+                if (!senders.some(s => s.track === track)) {
+                  pc.addTrack(track, localStreamRef.current!);
+                }
+              });
+            }
+
+            const offer = await pc.createOffer({
+              offerToReceiveAudio: true,
+              offerToReceiveVideo: true
+            });
             await pc.setLocalDescription(offer);
 
             ws.send(JSON.stringify({
@@ -421,6 +453,12 @@ export const CallProvider: React.FC<CallProviderProps> = ({
           // 3. Incoming Offer
           else if (signalType === 'offer') {
             setCallState('connected');
+
+            // Ensure local media is ready on answering peer
+            if (!localStreamRef.current) {
+              await setupLocalMedia(incomingMode === 'video');
+            }
+
             const pc = getOrCreatePeerConnection(from, fromName, fromColor);
 
             // Add local tracks if not already added
@@ -526,9 +564,15 @@ export const CallProvider: React.FC<CallProviderProps> = ({
 
   // 7. Start Call Action
   const startCall = async (mode: CallMode) => {
+    // If we have an incoming call pending, clicking Meet or Call should accept it directly!
+    if (callState === 'incoming') {
+      await acceptCall();
+      return;
+    }
+
     setCallMode(mode);
     setCallState('calling');
-    setViewMode(mode === 'audio' ? 'mini' : 'mini');
+    setViewMode('mini');
 
     await setupLocalMedia(mode === 'video');
 
@@ -810,6 +854,20 @@ export const CallProvider: React.FC<CallProviderProps> = ({
       }}
     >
       {children}
+      {/* Remote Audio Track Elements: Guarantees voice playback in all browsers */}
+      {participants.map(p => p.stream ? (
+        <audio
+          key={`remote-audio-elem-${p.id}`}
+          ref={el => {
+            if (el && p.stream && el.srcObject !== p.stream) {
+              el.srcObject = p.stream;
+              el.play().catch(e => console.warn('Audio auto-playback notice:', e));
+            }
+          }}
+          autoPlay
+          playsInline
+        />
+      ) : null)}
     </CallContext.Provider>
   );
 };

@@ -32,6 +32,7 @@ export const MiniCallWindow: React.FC = () => {
   const dragOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const windowRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
 
   // Active display participant or self
   const primaryParticipant = participants.find(p => p.stream) || participants[0] || null;
@@ -50,13 +51,22 @@ export const MiniCallWindow: React.FC = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Attach stream to video element
+  // Attach streams to video elements
   useEffect(() => {
-    if (!videoRef.current) return;
     if (primaryParticipant?.stream) {
-      videoRef.current.srcObject = primaryParticipant.stream;
-    } else if (localStream) {
-      videoRef.current.srcObject = localStream;
+      if (videoRef.current && videoRef.current.srcObject !== primaryParticipant.stream) {
+        videoRef.current.srcObject = primaryParticipant.stream;
+        videoRef.current.play().catch(() => {});
+      }
+      if (localVideoRef.current && localStream && localVideoRef.current.srcObject !== localStream) {
+        localVideoRef.current.srcObject = localStream;
+        localVideoRef.current.play().catch(() => {});
+      }
+    } else if (localStream && videoRef.current) {
+      if (videoRef.current.srcObject !== localStream) {
+        videoRef.current.srcObject = localStream;
+        videoRef.current.play().catch(() => {});
+      }
     }
   }, [primaryParticipant?.stream, localStream]);
 
@@ -129,13 +139,36 @@ export const MiniCallWindow: React.FC = () => {
     >
       {/* Video stream or Avatar fallback */}
       {isPeerVideo || isLocalVideo ? (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted={!isPeerVideo} // Mute self video to avoid feedback
-          className="w-full h-full object-cover bg-black"
-        />
+        <div className="relative w-full h-full bg-black">
+          {/* Main Video: Peer if present, else Self */}
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted={!isPeerVideo} // Only mute if showing self
+            className="w-full h-full object-cover"
+          />
+
+          {/* Self Camera PIP tile when connected to peer */}
+          {primaryParticipant?.stream && isLocalVideo && (
+            <div className="absolute top-2 right-2 w-20 h-14 rounded-lg overflow-hidden border border-purple-400/80 shadow-2xl bg-black z-10">
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-cover"
+              />
+            </div>
+          )}
+
+          {/* If waiting for peer */}
+          {!primaryParticipant?.stream && (
+            <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-sm text-[10px] text-purple-300 font-medium">
+              Waiting for friend...
+            </div>
+          )}
+        </div>
       ) : (
         <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-[#1a1528] to-[#0c0a14] p-4 text-center">
           <div

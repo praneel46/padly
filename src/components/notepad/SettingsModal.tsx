@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Settings, Flame, Clock, Download, Trash2, X, AlertTriangle, FileDown } from 'lucide-react';
+import { Settings, Flame, Clock, Download, Trash2, X, AlertTriangle, FileDown, Keyboard } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -10,6 +10,7 @@ interface SettingsModalProps {
   onExport: (format: 'pdf' | 'md' | 'txt') => void;
   onDeletePad: () => Promise<void>;
   isReadOnly: boolean;
+  onOpenShortcuts?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -20,7 +21,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onUpdateExpiry,
   onExport,
   onDeletePad,
-  isReadOnly
+  isReadOnly,
+  onOpenShortcuts,
 }) => {
   const [selectedDuration, setSelectedDuration] = useState<string>(
     expiresAt ? 'custom' : 'never'
@@ -101,6 +103,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Custom Keyboard Shortcuts Section */}
+        {onOpenShortcuts && (
+          <div className="mb-5 p-3 rounded-2xl bg-[#0C0C0C] border border-[#262626] flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-purple-950/50 text-purple-400 border border-purple-500/20">
+                <Keyboard className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-white">Keyboard Shortcuts</p>
+                <p className="text-[10px] text-[#646973]">Re-bind and record your own keys</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenShortcuts();
+              }}
+              className="px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-medium transition cursor-pointer"
+            >
+              Customize...
+            </button>
+          </div>
+        )}
 
         {/* Auto Expiry & Self Destruction */}
         {!isReadOnly && (

@@ -115,6 +115,22 @@ export const AudioCallBar: React.FC = () => {
           <span>End</span>
         </button>
       </div>
+
+      {/* Remote Audio Playback Elements for each participant */}
+      {participants.map(p => p.stream ? (
+        <audio
+          key={`audio-player-${p.id}`}
+          ref={el => {
+            if (el && p.stream && el.srcObject !== p.stream) {
+              el.srcObject = p.stream;
+              el.play().catch(() => {});
+            }
+          }}
+          autoPlay
+          playsInline
+          className="hidden"
+        />
+      ) : null)}
     </div>
   );
 };

@@ -24,11 +24,13 @@ import { CallProvider, useCall } from '../../context/CallContext';
 import { AudioCallBar } from '../call/AudioCallBar';
 import { MiniCallWindow } from '../call/MiniCallWindow';
 import { FullScreenCallModal } from '../call/FullScreenCallModal';
+import { IncomingCallDialog } from '../call/IncomingCallDialog';
 import { SpeedDialCallButton } from '../call/SpeedDialCallButton';
 import { CommandPalette } from '../call/CommandPalette';
 import { ShortcutsHelpModal } from '../call/ShortcutsHelpModal';
 import { ToastContainer, showToast } from '../common/ToastContainer';
 import { startBackendPinger } from '../../lib/keepAlive';
+import { getShortcutsList, isShortcutMatch } from '../../lib/shortcuts';
 
 export interface NotepadWorkspaceProps {
   code: string;
@@ -158,35 +160,6 @@ const NotepadWorkspaceInner: React.FC<InnerProps> = ({
     document.addEventListener('mousedown', handleOutside);
     return () => document.removeEventListener('mousedown', handleOutside);
   }, []);
-
-  // Keyboard Shortcuts: Ctrl+S, Ctrl+B, Ctrl+/, Ctrl+K, Esc
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        saveImmediately();
-        showToast('success', 'Pad saved manually');
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
-        if (activeTab === 'notepad' && textareaRef.current && document.activeElement === textareaRef.current) {
-          e.preventDefault();
-          handleFormat('bold');
-        }
-      } else if ((e.ctrlKey || e.metaKey) && e.key === '/') {
-        e.preventDefault();
-        setShowChatPanel(prev => !prev);
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setShowCommandPalette(prev => !prev);
-      } else if (e.key === 'Escape') {
-        setShowMoreMenu(false);
-        setShowCommandPalette(false);
-        setShowShortcutsModal(false);
-        setSelectedFileForPreview(null);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTab, content]);
 
   // Load Pad data
   const loadPage = useCallback(async () => {
@@ -349,7 +322,7 @@ const NotepadWorkspaceInner: React.FC<InnerProps> = ({
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(async () => {
       await saveImmediately();
-    }, 700);
+    }, 400);
   };
 
   // Click-to-focus on entire editor area, setting caret at end
@@ -413,6 +386,53 @@ const NotepadWorkspaceInner: React.FC<InnerProps> = ({
       el.setSelectionRange(start + replacement.length, start + replacement.length);
     }, 50);
   };
+
+  // Dynamic Keyboard Shortcuts with Custom User Key Bindings
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const list = getShortcutsList();
+      const saveSc = list.find(s => s.id === 'save')?.currentKey || 'Ctrl + S';
+      const boldSc = list.find(s => s.id === 'bold')?.currentKey || 'Ctrl + B';
+      const chatSc = list.find(s => s.id === 'chat')?.currentKey || 'Ctrl + /';
+      const cmdSc = list.find(s => s.id === 'command')?.currentKey || 'Ctrl + K';
+      const prevSc = list.find(s => s.id === 'preview')?.currentKey || 'Ctrl + P';
+      const meetSc = list.find(s => s.id === 'meet')?.currentKey || 'Ctrl + M';
+      const helpSc = list.find(s => s.id === 'help')?.currentKey || '?';
+
+      if (isShortcutMatch(e, saveSc)) {
+        e.preventDefault();
+        saveImmediately();
+        showToast('success', 'Pad saved manually');
+      } else if (isShortcutMatch(e, boldSc)) {
+        if (activeTab === 'notepad' && textareaRef.current && document.activeElement === textareaRef.current) {
+          e.preventDefault();
+          handleFormat('bold');
+        }
+      } else if (isShortcutMatch(e, chatSc)) {
+        e.preventDefault();
+        setShowChatPanel(prev => !prev);
+      } else if (isShortcutMatch(e, cmdSc)) {
+        e.preventDefault();
+        setShowCommandPalette(prev => !prev);
+      } else if (isShortcutMatch(e, prevSc)) {
+        e.preventDefault();
+        setIsMarkdownPreviewActive(prev => !prev);
+      } else if (isShortcutMatch(e, meetSc)) {
+        e.preventDefault();
+        startCall('video');
+      } else if (isShortcutMatch(e, helpSc) && document.activeElement !== textareaRef.current) {
+        e.preventDefault();
+        setShowShortcutsModal(true);
+      } else if (e.key === 'Escape') {
+        setShowMoreMenu(false);
+        setShowCommandPalette(false);
+        setShowShortcutsModal(false);
+        setSelectedFileForPreview(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTab, content, saveImmediately, startCall]);
 
   // Unlock password encrypted pad
   const handleUnlockPad = async (e: React.FormEvent) => {
@@ -1320,6 +1340,7 @@ const NotepadWorkspaceInner: React.FC<InnerProps> = ({
       {/* ============================================================ */}
       <MiniCallWindow />
       <FullScreenCallModal />
+      <IncomingCallDialog />
 
       {/* Floating Speed Dial Action Button (Hidden when chat is open) */}
       <SpeedDialCallButton
@@ -1394,6 +1415,7 @@ const NotepadWorkspaceInner: React.FC<InnerProps> = ({
         onClose={() => setShowSettingsModal(false)}
         expiresAt={expiresAt}
         burnAfterReading={burnAfterReading}
+        onOpenShortcuts={() => setShowShortcutsModal(true)}
         onUpdateExpiry={async (targetExpiresAt, burn) => {
           setExpiresAt(targetExpiresAt);
           setBurnAfterReading(burn);
