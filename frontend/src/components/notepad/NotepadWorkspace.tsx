@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  FileText, File, Image as ImageIcon, Music, Lock, ShieldCheck,
-  Share2, History, Settings, ArrowLeft, Sparkles, Check, Loader2,
-  Users, Upload, Download, Trash2, Eye, EyeOff, Search, Play,
-  Pause, SkipBack, SkipForward, Volume2, VolumeX, X, Archive, Plus,
-  Bold, Italic, Strikethrough, Heading1, Heading2, Heading3,
-  List, ListOrdered, CheckSquare, Quote, Code, Minus, RefreshCw, MessageSquare,
-  Video, ScreenShare, Subtitles
+  ArrowLeft, Share2, Settings, History, Lock, Unlock,
+  MessageSquare, Video, ShieldCheck, Sparkles, FileText,
+  File, Image as ImageIcon, Music, Repeat, Upload,
+  Download, Trash2, Eye, EyeOff, Play, Pause, RefreshCw,
+  Clock, Flame, Check, AlertCircle, Users, Copy, Archive,
+  X, Bold, Italic, Strikethrough, Heading1, Heading2,
+  List, CheckSquare, Code, Quote, Loader2, MoreVertical,
+  HelpCircle, Keyboard
 } from 'lucide-react';
-import { BrandLogo } from '../common/BrandLogo';
 import { ShareModal } from './ShareModal';
 import { LockModal } from './LockModal';
 import { VersionHistoryModal, PadVersion } from './VersionHistoryModal';
@@ -19,89 +19,181 @@ import { PeerChatAndCall } from './PeerChatAndCall';
 import { MeetRoomModal } from './MeetRoomModal';
 import { encryptText, decryptText, generateSalt } from '../../lib/crypto';
 import { PadFile } from './FilesPanel';
-import { AudioTrack } from './MusicPlayer';
 import { getApiUrl, getWsUrl } from '../../lib/api';
+import { CallProvider, useCall } from '../../context/CallContext';
+import { AudioCallBar } from '../call/AudioCallBar';
+import { MiniCallWindow } from '../call/MiniCallWindow';
+import { FullScreenCallModal } from '../call/FullScreenCallModal';
+import { SpeedDialCallButton } from '../call/SpeedDialCallButton';
+import { CommandPalette } from '../call/CommandPalette';
+import { ShortcutsHelpModal } from '../call/ShortcutsHelpModal';
+import { ToastContainer, showToast } from '../common/ToastContainer';
+import { startBackendPinger } from '../../lib/keepAlive';
 
-export type WorkspaceTab = 'notepad' | 'files' | 'photos' | 'audio' | 'converter';
-
-interface NotepadWorkspaceProps {
+export interface NotepadWorkspaceProps {
   code: string;
   isReadOnlyMode?: boolean;
   onNavigateHome: () => void;
   onNavigateCode: (code: string) => void;
 }
 
-export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
-  code,
-  isReadOnlyMode = false,
-  onNavigateHome,
-  onNavigateCode
-}) => {
-  // Active primary tab: 'notepad' | 'files' | 'photos' | 'audio' | 'converter'
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>('notepad');
+export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = (props) => {
+  const { code, onNavigateHome, onNavigateCode } = props;
+  const clientIdRef = useRef<string>(`client_${Math.random().toString(36).substring(2, 9)}`);
+  const wsRef = useRef<WebSocket | null>(null);
+  const [wsInstance, setWsInstance] = useState<WebSocket | null>(null);
 
-  // Notepad State
+  // Auto-ping Render backend every 4 minutes so it stays awake while padly is open
+  useEffect(() => {
+    startBackendPinger(4);
+  }, []);
+
+  // WebSocket Realtime Sync connection
+  useEffect(() => {
+    const wsUrl = getWsUrl();
+    const socket = new WebSocket(wsUrl);
+    wsRef.current = socket;
+    setWsInstance(socket);
+
+    socket.onopen = () => {
+      socket.send(JSON.stringify({
+        type: 'join',
+        code,
+        clientId: clientIdRef.current,
+      }));
+    };
+
+    return () => {
+      socket.close();
+    };
+  }, [code]);
+
+  return (
+    <CallProvider
+      code={code}
+      clientId={clientIdRef.current}
+      userName="You"
+      ws={wsInstance}
+    >
+      <NotepadWorkspaceInner
+        {...props}
+        wsRef={wsRef}
+        clientIdRef={clientIdRef}
+      />
+    </CallProvider>
+  );
+};
+
+interface InnerProps extends NotepadWorkspaceProps {
+  wsRef: React.MutableRefObject<WebSocket | null>;
+  clientIdRef: React.MutableRefObject<string>;
+}
+
+const NotepadWorkspaceInner: React.FC<InnerProps> = ({
+  code,
+  onNavigateHome,
+  onNavigateCode,
+  wsRef,
+  clientIdRef,
+}) => {
+  // Call Context
+  const { callState, callDuration, startCall, setViewMode } = useCall();
+
+  // Core Pad State
   const [content, setContent] = useState<string>('');
   const [title, setTitle] = useState<string>(code);
-  const [isMarkdownPreviewActive, setIsMarkdownPreviewActive] = useState<boolean>(false);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'offline'>('saved');
+  const [isReadOnlyMode, setIsReadOnlyMode] = useState<boolean>(false);
+  const [presenceCount, setPresenceCount] = useState<number>(1);
   const [isEncrypted, setIsEncrypted] = useState<boolean>(false);
   const [encryptionSalt, setEncryptionSalt] = useState<string | null>(null);
-  const [activePassword, setActivePassword] = useState<string>('');
   const [needsUnlock, setNeedsUnlock] = useState<boolean>(false);
   const [unlockPassword, setUnlockPassword] = useState<string>('');
+  const [showUnlockPass, setShowUnlockPass] = useState<boolean>(false);
   const [unlockError, setUnlockError] = useState<string | null>(null);
-
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
-  const [presenceCount, setPresenceCount] = useState<number>(1);
-  const [files, setFiles] = useState<PadFile[]>([]);
-  const [versions, setVersions] = useState<PadVersion[]>([]);
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const [burnAfterReading, setBurnAfterReading] = useState<boolean>(false);
 
-  // Modals
+  // Tab & View Modes
+  const [activeTab, setActiveTab] = useState<'notepad' | 'files' | 'photos' | 'audio' | 'converter'>('notepad');
+  const [isMarkdownPreviewActive, setIsMarkdownPreviewActive] = useState<boolean>(false);
+
+  // Modals & Panels
   const [showShareModal, setShowShareModal] = useState<boolean>(false);
   const [showLockModal, setShowLockModal] = useState<boolean>(false);
   const [showVersionsModal, setShowVersionsModal] = useState<boolean>(false);
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [showAIModal, setShowAIModal] = useState<boolean>(false);
-  const [showChatPanel, setShowChatPanel] = useState<boolean>(true);
   const [showMeetModal, setShowMeetModal] = useState<boolean>(false);
-  const [copyToast, setCopyToast] = useState<string | null>(null);
+  const [showChatPanel, setShowChatPanel] = useState<boolean>(false);
+  const [showMoreMenu, setShowMoreMenu] = useState<boolean>(false);
+  const [showCommandPalette, setShowCommandPalette] = useState<boolean>(false);
+  const [showShortcutsModal, setShowShortcutsModal] = useState<boolean>(false);
 
-  // File Preview Lightbox / OCR Modal
+  // Files & Media State
+  const [files, setFiles] = useState<PadFile[]>([]);
+  const [versions, setVersions] = useState<PadVersion[]>([]);
   const [selectedFileForPreview, setSelectedFileForPreview] = useState<PadFile | null>(null);
+  const [activeAudioPlaying, setActiveAudioPlaying] = useState<string | null>(null);
+  const [audioProgress, setAudioProgress] = useState<{ [id: string]: number }>({});
 
-  // Audio / Music Player State
-  const [currentAudioTrack, setCurrentAudioTrack] = useState<AudioTrack | null>(null);
-  const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
-  const [audioCurrentTime, setAudioCurrentTime] = useState<number>(0);
-  const [audioDuration, setAudioDuration] = useState<number>(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Audio refs
+  const audioElementsRef = useRef<{ [id: string]: HTMLAudioElement }>({});
 
-  // Upload Input Refs
-  const generalFileInputRef = useRef<HTMLInputElement>(null);
-  const photoFileInputRef = useRef<HTMLInputElement>(null);
-  const audioFileInputRef = useRef<HTMLInputElement>(null);
-
-  // Editor Refs
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  // Editor and Save refs
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const clientIdRef = useRef<string>(Math.random().toString(36).substring(2, 9));
-  const isIncomingSyncRef = useRef<boolean>(false);
   const rawEncryptedContentRef = useRef<string>('');
+  const passwordRef = useRef<string>('');
+  const generalFileInputRef = useRef<HTMLInputElement | null>(null);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
 
-  // 1. Fetch Page Data
+  // Close "more" dropdown on outside click
+  useEffect(() => {
+    const handleOutside = (e: MouseEvent) => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(e.target as Node)) {
+        setShowMoreMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, []);
+
+  // Keyboard Shortcuts: Ctrl+S, Ctrl+B, Ctrl+/, Ctrl+K, Esc
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        saveImmediately();
+        showToast('success', 'Pad saved manually');
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+        if (activeTab === 'notepad' && textareaRef.current && document.activeElement === textareaRef.current) {
+          e.preventDefault();
+          handleFormat('bold');
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        setShowChatPanel(prev => !prev);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setShowCommandPalette(prev => !prev);
+      } else if (e.key === 'Escape') {
+        setShowMoreMenu(false);
+        setShowCommandPalette(false);
+        setShowShortcutsModal(false);
+        setSelectedFileForPreview(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTab, content]);
+
+  // Load Pad data
   const loadPage = useCallback(async () => {
     try {
       const res = await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}`));
-      if (res.status === 410) {
-        alert('This pad had "Burn After Reading" enabled and has been erased.');
-        onNavigateHome();
-        return;
-      }
       const data = await res.json();
+
       if (data.exists) {
         setTitle(data.title || code);
         setIsEncrypted(!!data.is_encrypted);
@@ -124,10 +216,11 @@ export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
       }
     } catch (e) {
       console.error('Failed to load page:', e);
+      setSaveStatus('offline');
     }
-  }, [code, onNavigateHome]);
+  }, [code]);
 
-  // 2. Fetch Files & Versions
+  // Fetch Files & Versions
   const loadFiles = useCallback(async () => {
     try {
       const res = await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}/files`));
@@ -162,420 +255,349 @@ export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
     loadVersions();
   }, [loadPage, loadFiles, loadVersions]);
 
-  // 3. WebSocket Realtime Sync
+  // Auto-focus editor on mount and when unlocking, placing caret at the end
   useEffect(() => {
-    const wsUrl = getWsUrl();
-    const socket = new WebSocket(wsUrl);
-    wsRef.current = socket;
+    if (!needsUnlock && activeTab === 'notepad' && textareaRef.current) {
+      textareaRef.current.focus();
+      const len = textareaRef.current.value.length;
+      textareaRef.current.setSelectionRange(len, len);
+    }
+  }, [needsUnlock, activeTab]);
 
-    socket.onopen = () => {
-      socket.send(JSON.stringify({
-        type: 'join',
-        code,
-        clientId: clientIdRef.current
-      }));
-    };
+  // WebSocket message receiver
+  useEffect(() => {
+    const socket = wsRef.current;
+    if (!socket) return;
 
-    socket.onmessage = (event) => {
+    const handleMessage = (event: MessageEvent) => {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'presence') {
-          setPresenceCount(msg.count || 1);
-        } else if (msg.type === 'content_change') {
-          if (msg.senderId !== clientIdRef.current) {
-            isIncomingSyncRef.current = true;
-            if (msg.content !== undefined) setContent(msg.content);
-            if (msg.title) setTitle(msg.title);
-            setTimeout(() => {
-              isIncomingSyncRef.current = false;
-            }, 100);
+
+        if (msg.type === 'page_update') {
+          if (msg.clientId !== clientIdRef.current) {
+            if (isEncrypted) {
+              if (passwordRef.current) {
+                decryptText(msg.content, passwordRef.current, msg.encryption_salt || encryptionSalt || '')
+                  .then(dec => setContent(dec))
+                  .catch(() => {});
+              }
+            } else {
+              setContent(msg.content);
+            }
           }
+        } else if (msg.type === 'presence') {
+          setPresenceCount(msg.count || 1);
         } else if (msg.type === 'file_uploaded') {
+          loadFiles();
+          showToast('info', 'A new file was uploaded to this pad');
+        } else if (msg.type === 'file_deleted') {
           loadFiles();
         }
       } catch (err) {
-        console.error('WS parse error', err);
+        console.error('Error handling sync message:', err);
       }
     };
 
+    socket.addEventListener('message', handleMessage);
     return () => {
-      socket.close();
+      socket.removeEventListener('message', handleMessage);
     };
-  }, [code, loadFiles]);
+  }, [wsRef.current, isEncrypted, encryptionSalt, loadFiles]);
 
-  // 4. Autosave (Debounced ~500ms)
-  const saveContent = useCallback(
-    async (textToSave: string, currentTitle: string) => {
-      if (isReadOnlyMode || needsUnlock) return;
-      setSaveStatus('saving');
+  // Save Content
+  const saveImmediately = useCallback(async () => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    setSaveStatus('saving');
 
-      try {
-        let payloadContent = textToSave;
-        if (isEncrypted && activePassword && encryptionSalt) {
-          payloadContent = await encryptText(textToSave, activePassword, encryptionSalt);
-        }
-
-        await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}`), {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            content: payloadContent,
-            title: currentTitle,
-            mode: 'rich',
-            is_encrypted: isEncrypted,
-            encryption_salt: encryptionSalt,
-            expires_at: expiresAt,
-            burn_after_reading: burnAfterReading
-          })
-        });
-
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({
-            type: 'content_change',
-            content: textToSave,
-            title: currentTitle,
-            clientId: clientIdRef.current
-          }));
-        }
-
-        setSaveStatus('saved');
-      } catch (e) {
-        console.error('Save failed:', e);
-        setSaveStatus('unsaved');
+    try {
+      let payloadContent = content;
+      if (isEncrypted && passwordRef.current && encryptionSalt) {
+        payloadContent = await encryptText(content, passwordRef.current, encryptionSalt);
       }
-    },
-    [code, isReadOnlyMode, needsUnlock, isEncrypted, activePassword, encryptionSalt, expiresAt, burnAfterReading]
-  );
 
-  const handleContentChange = (newText: string) => {
-    setContent(newText);
-    setSaveStatus('unsaved');
+      await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: payloadContent,
+          title,
+          clientId: clientIdRef.current,
+        }),
+      });
 
-    if (isIncomingSyncRef.current) return;
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: 'page_update',
+          code,
+          content: payloadContent,
+          clientId: clientIdRef.current,
+          encryption_salt: encryptionSalt,
+        }));
+      }
+
+      setSaveStatus('saved');
+    } catch (e) {
+      console.error('Failed to save page:', e);
+      setSaveStatus('offline');
+    }
+  }, [code, content, title, isEncrypted, encryptionSalt]);
+
+  const handleContentChange = (newVal: string) => {
+    setContent(newVal);
+    setSaveStatus('saving');
 
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    saveTimeoutRef.current = setTimeout(() => {
-      saveContent(newText, title);
-    }, 500);
+    saveTimeoutRef.current = setTimeout(async () => {
+      await saveImmediately();
+    }, 700);
   };
 
-  // Global Keyboard Shortcuts (Disable F12, Global Ctrl+X full text clipboard copy)
-  useEffect(() => {
-    const handleGlobalKeyDown = async (e: KeyboardEvent) => {
-      // 1. Disable F12 (Console) and DevTools Shortcuts
-      if (
-        e.key === 'F12' ||
-        (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.key === 'J' || e.key === 'j' || e.key === 'C' || e.key === 'c')) ||
-        (e.ctrlKey && (e.key === 'u' || e.key === 'U'))
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-
-      // 2. Global Ctrl+X: Copy entire notepad content to clipboard
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'x' || e.key === 'X')) {
-        const activeEl = document.activeElement;
-        const textarea = textareaRef.current;
-        const isSelectingSpecificSlice =
-          activeEl === textarea &&
-          textarea &&
-          textarea.selectionStart !== textarea.selectionEnd;
-
-        // If cursor is outside the notepad OR no specific sub-text is highlighted, copy entire notepad
-        if (!isSelectingSpecificSlice) {
-          e.preventDefault();
-          if (content) {
-            try {
-              await navigator.clipboard.writeText(content);
-              setCopyToast('Entire notepad text copied to clipboard! (Ctrl+V / Win+V ready)');
-              setTimeout(() => setCopyToast(null), 3000);
-            } catch (err) {
-              console.error('Clipboard copy failed:', err);
-            }
-          }
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleGlobalKeyDown, true);
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown, true);
-  }, [content]);
-
-  // 5. Upload File Helper
-  const handleUploadFiles = async (fileList: FileList) => {
-    if (isReadOnlyMode) return;
-    const formData = new FormData();
-    for (let i = 0; i < fileList.length; i++) {
-      formData.append('files', fileList[i]);
-    }
-
-    setUploadProgress(15);
-    try {
-      const interval = setInterval(() => {
-        setUploadProgress((prev) => (prev && prev < 85 ? prev + 20 : prev));
-      }, 200);
-
-      const res = await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}/files`), {
-        method: 'POST',
-        body: formData
-      });
-      clearInterval(interval);
-      setUploadProgress(100);
-
-      const data = await res.json();
-      if (data.files) {
-        await loadFiles();
-      }
-      setTimeout(() => setUploadProgress(null), 800);
-    } catch (e) {
-      console.error('File upload failed:', e);
-      setUploadProgress(null);
+  // Click-to-focus on entire editor area, setting caret at end
+  const handleEditorAreaClick = (e: React.MouseEvent) => {
+    if (e.target !== textareaRef.current && textareaRef.current) {
+      textareaRef.current.focus();
+      const len = textareaRef.current.value.length;
+      textareaRef.current.setSelectionRange(len, len);
     }
   };
 
-  const handleDeleteFile = async (fileId: string) => {
-    if (isReadOnlyMode) return;
-    try {
-      await fetch(getApiUrl(`/api/files/${fileId}`), { method: 'DELETE' });
-      await loadFiles();
-    } catch (e) {
-      console.error('Delete failed:', e);
-    }
-  };
+  // Text formatting helpers (Bold, Italic, Strike, H1, H2, List, etc.)
+  const handleFormat = (type: string) => {
+    const el = textareaRef.current;
+    if (!el) return;
 
-  // Categorize files
-  const photoFiles = files.filter(f => f.mime_type.startsWith('image/'));
-  const audioFiles = files.filter(f => f.mime_type.startsWith('audio/'));
-  const docFiles = files.filter(f => !f.mime_type.startsWith('image/') && !f.mime_type.startsWith('audio/'));
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const selectedText = content.substring(start, end);
+    let replacement = '';
 
-  // Format Text Actions
-  const handleFormat = (action: string) => {
-    if (isReadOnlyMode || !textareaRef.current) return;
-    const textarea = textareaRef.current;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selected = content.substring(start, end);
-
-    let replacement = selected;
-    let cursorOffset = 0;
-
-    switch (action) {
+    switch (type) {
       case 'bold':
-        replacement = `**${selected || 'bold text'}**`;
-        cursorOffset = selected ? replacement.length : 2;
+        replacement = `**${selectedText || 'bold text'}**`;
         break;
       case 'italic':
-        replacement = `*${selected || 'italic text'}*`;
-        cursorOffset = selected ? replacement.length : 1;
+        replacement = `*${selectedText || 'italic text'}*`;
         break;
       case 'strike':
-        replacement = `~~${selected || 'strikethrough'}~~`;
-        cursorOffset = selected ? replacement.length : 2;
+        replacement = `~~${selectedText || 'struck text'}~~`;
         break;
       case 'h1':
-        replacement = `\n# ${selected || 'Heading 1'}\n`;
+        replacement = `\n# ${selectedText || 'Heading 1'}\n`;
         break;
       case 'h2':
-        replacement = `\n## ${selected || 'Heading 2'}\n`;
-        break;
-      case 'h3':
-        replacement = `\n### ${selected || 'Heading 3'}\n`;
+        replacement = `\n## ${selectedText || 'Heading 2'}\n`;
         break;
       case 'ul':
-        replacement = `\n- ${selected || 'List item'}\n`;
-        break;
-      case 'ol':
-        replacement = `\n1. ${selected || 'List item'}\n`;
+        replacement = `\n- ${selectedText || 'List item'}\n`;
         break;
       case 'todo':
-        replacement = `\n- [ ] ${selected || 'Task to do'}\n`;
-        break;
-      case 'quote':
-        replacement = `\n> ${selected || 'Quote'}\n`;
+        replacement = `\n- [ ] ${selectedText || 'To-do item'}\n`;
         break;
       case 'code':
-        replacement = `\n\`\`\`\n${selected || '// code snippet'}\n\`\`\`\n`;
+        replacement = selectedText.includes('\n')
+          ? `\n\`\`\`\n${selectedText || 'code'}\n\`\`\`\n`
+          : `\`${selectedText || 'code'}\``;
         break;
-      case 'hr':
-        replacement = `\n---\n`;
+      case 'quote':
+        replacement = `\n> ${selectedText || 'Quote'}\n`;
         break;
       default:
-        break;
+        return;
     }
 
     const updated = content.substring(0, start) + replacement + content.substring(end);
     handleContentChange(updated);
 
     setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(start + cursorOffset, start + cursorOffset);
-    }, 10);
+      el.focus();
+      el.setSelectionRange(start + replacement.length, start + replacement.length);
+    }, 50);
   };
 
-  // Unlock password
+  // Unlock password encrypted pad
   const handleUnlockPad = async (e: React.FormEvent) => {
     e.preventDefault();
     setUnlockError(null);
+
     try {
-      if (!encryptionSalt) throw new Error('Missing salt');
-      const decrypted = await decryptText(
-        rawEncryptedContentRef.current,
-        unlockPassword,
-        encryptionSalt
-      );
+      const salt = encryptionSalt || '';
+      const decrypted = await decryptText(rawEncryptedContentRef.current, unlockPassword, salt);
+      passwordRef.current = unlockPassword;
       setContent(decrypted);
-      setActivePassword(unlockPassword);
       setNeedsUnlock(false);
-      setUnlockPassword('');
-    } catch (err: any) {
-      setUnlockError('Incorrect password or corrupt encryption payload.');
+      showToast('success', 'Pad decrypted and opened');
+    } catch (err) {
+      setUnlockError('Incorrect password. Please verify and try again.');
     }
   };
 
-  // Lock pad
+  // Lock Pad Encryption handlers
   const handleApplyLock = async (password: string) => {
     const salt = await generateSalt();
-    setEncryptionSalt(salt);
-    setIsEncrypted(true);
-    setActivePassword(password);
     const encrypted = await encryptText(content, password, salt);
-    rawEncryptedContentRef.current = encrypted;
-    saveContent(content, title);
+
+    await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}/lock`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        password,
+        encryption_salt: salt,
+        content: encrypted,
+      }),
+    });
+
+    passwordRef.current = password;
+    setIsEncrypted(true);
+    setEncryptionSalt(salt);
+    showToast('success', 'Pad encrypted with AES-256');
   };
 
   const handleRemoveLock = async (password: string): Promise<boolean> => {
-    if (password !== activePassword) return false;
-    setIsEncrypted(false);
-    setEncryptionSalt(null);
-    setActivePassword('');
-    saveContent(content, title);
-    return true;
+    const res = await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}/unlock`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+
+    const data = await res.json();
+    if (data.success) {
+      passwordRef.current = '';
+      setIsEncrypted(false);
+      setEncryptionSalt(null);
+      showToast('info', 'Encryption removed from pad');
+      return true;
+    }
+    return false;
   };
 
-  // Audio Playback
-  const playTrack = (track: AudioTrack) => {
-    setCurrentAudioTrack(track);
-    if (audioRef.current) {
-      audioRef.current.src = track.url;
-      audioRef.current.play().then(() => setIsPlayingAudio(true)).catch(console.error);
+  // Upload Files
+  const handleUploadFiles = async (uploadedFiles: FileList) => {
+    if (!uploadedFiles || uploadedFiles.length === 0) return;
+    const formData = new FormData();
+    for (let i = 0; i < uploadedFiles.length; i++) {
+      formData.append('files', uploadedFiles[i]);
+    }
+
+    try {
+      showToast('info', `Uploading ${uploadedFiles.length} file(s)...`);
+      await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}/files`), {
+        method: 'POST',
+        body: formData,
+      });
+      await loadFiles();
+      showToast('success', 'Files uploaded successfully');
+    } catch (e) {
+      console.error('File upload failed:', e);
+      showToast('error', 'File upload failed');
     }
   };
 
-  const toggleAudio = () => {
-    if (!audioRef.current) return;
-    if (isPlayingAudio) {
-      audioRef.current.pause();
-      setIsPlayingAudio(false);
-    } else {
-      audioRef.current.play().then(() => setIsPlayingAudio(true)).catch(console.error);
+  // Delete File
+  const handleDeleteFile = async (fileId: string) => {
+    try {
+      await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}/files/${fileId}`), {
+        method: 'DELETE',
+      });
+      setFiles(prev => prev.filter(f => f.id !== fileId));
+      showToast('info', 'File removed');
+    } catch (e) {
+      console.error('Failed to delete file:', e);
     }
   };
 
-  const formatTime = (secs: number) => {
-    if (isNaN(secs)) return '0:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-  };
-
-  // Render markdown helper for on-demand preview
-  const renderMarkdownText = (text: string) => {
-    const lines = text.split('\n');
-    return (
-      <div className="space-y-2 text-[#D7E2EA] font-sans leading-relaxed text-sm text-left">
-        {lines.map((line, idx) => {
-          if (line.startsWith('# ')) return <h1 key={idx} className="text-2xl font-bold text-white border-b border-[#262626] pb-1 mt-4">{line.replace('# ', '')}</h1>;
-          if (line.startsWith('## ')) return <h2 key={idx} className="text-xl font-bold text-white mt-3">{line.replace('## ', '')}</h2>;
-          if (line.startsWith('### ')) return <h3 key={idx} className="text-lg font-semibold text-purple-300 mt-2">{line.replace('### ', '')}</h3>;
-          if (line.startsWith('> ')) return <blockquote key={idx} className="border-l-4 border-purple-500 pl-3 italic text-[#BBCCD7] my-2 bg-purple-900/10 py-1 rounded-r">{line.replace('> ', '')}</blockquote>;
-          if (line.startsWith('- [ ] ') || line.startsWith('- [x] ')) {
-            const isChecked = line.startsWith('- [x] ');
-            return (
-              <div key={idx} className="flex items-center gap-2">
-                <input type="checkbox" readOnly checked={isChecked} className="w-3.5 h-3.5 accent-purple-600 rounded" />
-                <span className={isChecked ? 'line-through opacity-60' : ''}>{line.slice(6)}</span>
-              </div>
-            );
-          }
-          if (line.startsWith('- ')) return <li key={idx} className="list-disc ml-4">{line.replace('- ', '')}</li>;
-          if (line.startsWith('---')) return <hr key={idx} className="border-[#262626] my-4" />;
-          if (!line.trim()) return <div key={idx} className="h-2" />;
-          return <p key={idx}>{line}</p>;
-        })}
-      </div>
-    );
-  };
-
+  // Word & Character count
   const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
   const charCount = content.length;
 
+  // Filter files by tab
+  const docFiles = files.filter(f => !f.mime_type.startsWith('image/') && !f.mime_type.startsWith('audio/'));
+  const photoFiles = files.filter(f => f.mime_type.startsWith('image/'));
+  const audioFiles = files.filter(f => f.mime_type.startsWith('audio/'));
+
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
   return (
-    <div className="h-screen w-screen bg-[#0C0C0C] text-[#D7E2EA] flex flex-col font-kanit overflow-hidden select-none relative">
-      {/* Toast for Global Ctrl+X Copy Notification */}
-      {copyToast && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-[#161616]/95 border-2 border-purple-500 rounded-full px-6 py-2.5 shadow-[0_8px_30px_rgba(118,33,176,0.6)] text-white text-xs font-medium uppercase tracking-wider flex items-center gap-2.5 animate-bounce">
-          <Sparkles className="w-4 h-4 text-purple-400" />
-          <span>{copyToast}</span>
-        </div>
-      )}
-
-      {/* Hidden Audio Element */}
-      <audio
-        ref={audioRef}
-        onTimeUpdate={() => setAudioCurrentTime(audioRef.current?.currentTime || 0)}
-        onLoadedMetadata={() => setAudioDuration(audioRef.current?.duration || 0)}
-        onEnded={() => setIsPlayingAudio(false)}
-      />
-
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#0C0C0C] text-[#D7E2EA] font-sans select-text">
       {/* ============================================================ */}
-      {/* 1. TOP HEADER BAR */}
+      {/* 1. TOP HEADER BAR: Grouped Clean Actions */}
       {/* ============================================================ */}
-      <header className="bg-[#141414] border-b border-[#262626] px-4 sm:px-6 py-2.5 flex items-center justify-between z-20 flex-shrink-0">
-        <div className="flex items-center gap-3">
+      <header className="h-14 bg-[#141414] border-b border-[#262626] px-4 sm:px-6 flex items-center justify-between z-30 flex-shrink-0 select-none">
+        {/* Left: Back Arrow, Brand Logo, Code Chip, Save Status */}
+        <div className="flex items-center gap-2 sm:gap-3">
           <button
             onClick={onNavigateHome}
-            className="p-1.5 rounded-xl hover:bg-white/10 text-[#646973] hover:text-white transition cursor-pointer"
-            title="Back to Home"
+            className="p-2 rounded-xl text-[#646973] hover:text-white hover:bg-white/10 transition cursor-pointer"
+            title="Return to Home"
           >
-            <ArrowLeft className="w-5 h-5" />
+            <ArrowLeft className="w-4 h-4" />
           </button>
 
-          <BrandLogo size="sm" onClick={onNavigateHome} />
-
-          {/* Current Code */}
-          <div className="flex items-center gap-2 bg-[#0C0C0C] border border-[#262626] px-3 py-1 rounded-full">
-            <span className="text-[11px] uppercase tracking-wider text-[#646973] font-semibold">Code:</span>
-            <span className="text-xs sm:text-sm font-mono font-bold text-white">#{code}</span>
+          <div
+            onClick={onNavigateHome}
+            className="flex items-center gap-2 cursor-pointer font-bold tracking-tight text-white hover:opacity-90 transition mr-1"
+          >
+            <span className="w-2.5 h-2.5 rounded-full bg-purple-500 shadow-[0_0_8px_#a855f7]" />
+            <span className="text-sm uppercase tracking-wider font-extrabold hidden md:inline">
+              padly
+            </span>
           </div>
 
-          {/* Save Status Indicator */}
-          <div className="hidden sm:flex items-center gap-1.5 text-xs">
+          {/* CODE CHIP WITH COPY ACTION */}
+          <div
+            onClick={() => {
+              navigator.clipboard.writeText(window.location.href);
+              showToast('success', 'Pad link copied to clipboard');
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-purple-950/40 border border-purple-500/30 text-purple-300 font-mono text-xs font-semibold cursor-pointer hover:bg-purple-900/50 transition"
+            title="Click to copy pad share URL"
+          >
+            <span>#{code}</span>
+            <Copy className="w-3 h-3 opacity-60 hover:opacity-100" />
+          </div>
+
+          {/* SAVE STATUS DOT (Problem 4 Indicator) */}
+          <div className="hidden sm:flex items-center gap-2 text-xs pl-1">
             {saveStatus === 'saved' ? (
-              <span className="flex items-center gap-1 text-emerald-400 font-medium">
-                <Check className="w-3.5 h-3.5" /> Saved
+              <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]" />
+                <span>Saved</span>
               </span>
             ) : saveStatus === 'saving' ? (
-              <span className="flex items-center gap-1 text-purple-400 animate-pulse font-medium">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...
+              <span className="flex items-center gap-1.5 text-purple-400 font-medium">
+                <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse shadow-[0_0_6px_rgba(192,132,252,0.8)]" />
+                <span>Saving...</span>
               </span>
             ) : (
-              <span className="text-amber-400 font-medium">Unsaved</span>
+              <span className="flex items-center gap-1.5 text-rose-400 font-medium">
+                <span className="w-2 h-2 rounded-full bg-rose-400 shadow-[0_0_6px_rgba(251,113,133,0.8)]" />
+                <span>Offline</span>
+              </span>
             )}
           </div>
         </div>
 
-        {/* Header Right Actions: AI Assist, Lock, Share, Settings */}
+        {/* Right: Primary Visible Actions + More Menu */}
         <div className="flex items-center gap-2">
-          {/* Chat & Call Button */}
+          {/* CALL IN PROGRESS RESTORE PILL (When call active & chat closed) */}
+          {callState !== 'idle' && !showChatPanel && (
+            <button
+              onClick={() => {
+                setShowChatPanel(true);
+                setViewMode('docked');
+              }}
+              className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 text-xs font-semibold hover:bg-emerald-900/80 transition animate-pulse cursor-pointer shadow-md"
+              title="Call is active. Click to restore call controls"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              <span>In Call ({formatDuration(callDuration)})</span>
+            </button>
+          )}
+
+          {/* CHAT TOGGLE */}
           <button
             onClick={() => setShowChatPanel(!showChatPanel)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium uppercase tracking-wider transition cursor-pointer ${
@@ -583,78 +605,126 @@ export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
                 ? 'bg-purple-600 text-white shadow-sm'
                 : 'bg-white/5 border border-[#262626] text-[#D7E2EA] hover:bg-white/10'
             }`}
-            title="Toggle Synchronized Chat Panel"
+            title="Toggle Synchronized Chat Panel (Ctrl+/)"
           >
             <MessageSquare className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Chat</span>
+            <span className="hidden md:inline">Chat</span>
           </button>
 
-          {/* Multi-Person Video Meet Button (Google Meet Style) */}
+          {/* MEET QUICK START */}
           <button
-            onClick={() => setShowMeetModal(true)}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold uppercase tracking-wider transition shadow-[0_0_15px_rgba(118,33,176,0.4)] cursor-pointer"
-            title="Start Multi-Person Video Meet (Google Meet Style with Screen Share & Captions)"
+            onClick={() => startCall('video')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold uppercase tracking-wider transition shadow-[0_0_15px_rgba(118,33,176,0.4)] cursor-pointer"
+            title="Start Video/Voice Meet (Persistent floating call)"
           >
             <Video className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Meet (Video/Voice)</span>
+            <span className="hidden sm:inline">Meet</span>
           </button>
 
-          {/* AI Assistant Button */}
+          {/* AI ASSIST */}
           <button
             onClick={() => setShowAIModal(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-purple-900/30 border border-purple-500/40 text-purple-300 hover:text-white text-xs font-medium uppercase tracking-wider transition hover:bg-purple-800/40 cursor-pointer"
+            title="AI Writing & Coding Assistant"
           >
             <Sparkles className="w-3.5 h-3.5 text-purple-400" />
             <span className="hidden sm:inline">AI Assist</span>
           </button>
 
-          {/* Client-Side Lock Button */}
-          <button
-            onClick={() => setShowLockModal(true)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium uppercase tracking-wider transition cursor-pointer ${
-              isEncrypted
-                ? 'bg-emerald-950/40 border border-emerald-500/50 text-emerald-300'
-                : 'bg-white/5 border border-[#262626] text-[#D7E2EA] hover:bg-white/10'
-            }`}
-          >
-            {isEncrypted ? <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> : <Lock className="w-3.5 h-3.5 text-[#646973]" />}
-            <span className="hidden sm:inline">{isEncrypted ? 'Encrypted' : 'Lock Pad'}</span>
-          </button>
+          {/* MORE MENU DROPDOWN (Collapsing Lock, Share, History, Settings) */}
+          <div className="relative" ref={moreMenuRef}>
+            <button
+              onClick={() => setShowMoreMenu(!showMoreMenu)}
+              className="p-2 rounded-full hover:bg-white/10 text-[#646973] hover:text-[#D7E2EA] transition cursor-pointer"
+              title="More Actions"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </button>
 
-          {/* Share Modal Trigger */}
-          <button
-            onClick={() => setShowShareModal(true)}
-            className="p-2 rounded-full hover:bg-white/10 text-[#646973] hover:text-[#D7E2EA] transition cursor-pointer"
-            title="Share & QR Code"
-          >
-            <Share2 className="w-4 h-4" />
-          </button>
+            {showMoreMenu && (
+              <div className="absolute right-0 mt-2 w-52 bg-[#141220] border border-purple-500/30 rounded-2xl shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                <button
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    setShowLockModal(true);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs hover:bg-white/10 text-left transition"
+                >
+                  {isEncrypted ? <ShieldCheck className="w-4 h-4 text-emerald-400" /> : <Lock className="w-4 h-4 text-purple-400" />}
+                  <span>{isEncrypted ? 'Pad Encrypted' : 'Lock & Encrypt'}</span>
+                </button>
 
-          {/* Version History */}
-          <button
-            onClick={() => {
-              loadVersions();
-              setShowVersionsModal(true);
-            }}
-            className="p-2 rounded-full hover:bg-white/10 text-[#646973] hover:text-[#D7E2EA] transition cursor-pointer"
-            title="Version History"
-          >
-            <History className="w-4 h-4" />
-          </button>
+                <button
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    setShowShareModal(true);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs hover:bg-white/10 text-left transition"
+                >
+                  <Share2 className="w-4 h-4 text-purple-400" />
+                  <span>Share & QR Code</span>
+                </button>
 
-          {/* Settings & Export */}
-          <button
-            onClick={() => setShowSettingsModal(true)}
-            className="p-2 rounded-full hover:bg-white/10 text-[#646973] hover:text-[#D7E2EA] transition cursor-pointer"
-            title="Settings & Export"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
+                <button
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    loadVersions();
+                    setShowVersionsModal(true);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs hover:bg-white/10 text-left transition"
+                >
+                  <History className="w-4 h-4 text-purple-400" />
+                  <span>Version History</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    setShowSettingsModal(true);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs hover:bg-white/10 text-left transition"
+                >
+                  <Settings className="w-4 h-4 text-purple-400" />
+                  <span>Settings & Expiry</span>
+                </button>
+
+                <div className="my-1 border-t border-white/5" />
+
+                <button
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    setShowShortcutsModal(true);
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs hover:bg-white/10 text-left transition text-white/70"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Keyboard className="w-4 h-4 text-purple-400" />
+                    <span>Shortcuts</span>
+                  </div>
+                  <kbd className="text-[10px] bg-white/5 px-1.5 py-0.5 rounded border border-white/10">?</kbd>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    setShowCommandPalette(true);
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs hover:bg-white/10 text-left transition text-white/70"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <HelpCircle className="w-4 h-4 text-purple-400" />
+                    <span>Command Palette</span>
+                  </div>
+                  <kbd className="text-[10px] bg-white/5 px-1.5 py-0.5 rounded border border-white/10">Ctrl+K</kbd>
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Realtime Active Viewers */}
           <div
             className="flex items-center gap-1.5 bg-[#0C0C0C] border border-[#262626] px-2.5 py-1 rounded-full text-xs text-[#D7E2EA] ml-1"
-            title={`${presenceCount} device(s) live`}
+            title={`${presenceCount} live participant(s)`}
           >
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <Users className="w-3.5 h-3.5 text-[#646973]" />
@@ -664,40 +734,41 @@ export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
       </header>
 
       {/* ============================================================ */}
-      {/* 2. THE 5 MAIN PRIMARY TABS (PROMINENT BIG TEXT) */}
+      {/* 2. AUDIO CALL SLIM BAR (Fixed under top bar during voice call) */}
       {/* ============================================================ */}
-      <div className="w-full bg-[#111111] border-b border-[#262626] px-4 sm:px-8 py-3 flex items-center justify-between z-10 flex-shrink-0">
-        <div className="flex items-center gap-2 sm:gap-3 md:gap-4 mx-auto sm:mx-0 overflow-x-auto">
-          {/* Tab 1: Normal Notepad */}
+      <AudioCallBar />
+
+      {/* ============================================================ */}
+      {/* 3. THE 5 MAIN PRIMARY TABS (Animated & Clear file badges) */}
+      {/* ============================================================ */}
+      <div className="w-full bg-[#111111] border-b border-[#262626] px-4 sm:px-8 py-2.5 flex items-center justify-between z-10 flex-shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto">
+          {/* Tab 1: Notepad */}
           <button
             onClick={() => setActiveTab('notepad')}
-            className={`flex items-center gap-2 px-3.5 sm:px-5 py-2.5 rounded-2xl transition-all cursor-pointer ${
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-xl transition-all cursor-pointer ${
               activeTab === 'notepad'
-                ? 'bg-purple-600/25 border-2 border-purple-500 text-white shadow-[0_0_20px_rgba(118,33,176,0.3)]'
+                ? 'bg-purple-600/25 border-2 border-purple-500 text-white shadow-[0_0_15px_rgba(118,33,176,0.3)]'
                 : 'bg-[#181818] border border-[#262626] text-[#646973] hover:text-[#D7E2EA]'
             }`}
           >
-            <FileText className={`w-5 h-5 ${activeTab === 'notepad' ? 'text-purple-400' : ''}`} />
-            <span className="text-sm sm:text-base font-bold uppercase tracking-wider">
-              Notepad
-            </span>
+            <FileText className={`w-4 h-4 ${activeTab === 'notepad' ? 'text-purple-400' : ''}`} />
+            <span className="text-xs sm:text-sm font-bold uppercase tracking-wider">Notepad</span>
           </button>
 
           {/* Tab 2: PDFs & Files */}
           <button
             onClick={() => setActiveTab('files')}
-            className={`flex items-center gap-2 px-3.5 sm:px-5 py-2.5 rounded-2xl transition-all cursor-pointer ${
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-xl transition-all cursor-pointer ${
               activeTab === 'files'
-                ? 'bg-purple-600/25 border-2 border-purple-500 text-white shadow-[0_0_20px_rgba(118,33,176,0.3)]'
+                ? 'bg-purple-600/25 border-2 border-purple-500 text-white shadow-[0_0_15px_rgba(118,33,176,0.3)]'
                 : 'bg-[#181818] border border-[#262626] text-[#646973] hover:text-[#D7E2EA]'
             }`}
           >
-            <File className={`w-5 h-5 ${activeTab === 'files' ? 'text-purple-400' : ''}`} />
-            <span className="text-sm sm:text-base font-bold uppercase tracking-wider">
-              PDFs & Files
-            </span>
+            <File className={`w-4 h-4 ${activeTab === 'files' ? 'text-purple-400' : ''}`} />
+            <span className="text-xs sm:text-sm font-bold uppercase tracking-wider">PDFs & Files</span>
             {docFiles.length > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-purple-900/60 text-purple-200 font-mono">
+              <span className="text-[11px] px-1.5 py-0.2 rounded-full bg-purple-900/60 text-purple-200 font-mono">
                 {docFiles.length}
               </span>
             )}
@@ -706,18 +777,16 @@ export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
           {/* Tab 3: Photos */}
           <button
             onClick={() => setActiveTab('photos')}
-            className={`flex items-center gap-2 px-3.5 sm:px-5 py-2.5 rounded-2xl transition-all cursor-pointer ${
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-xl transition-all cursor-pointer ${
               activeTab === 'photos'
-                ? 'bg-purple-600/25 border-2 border-purple-500 text-white shadow-[0_0_20px_rgba(118,33,176,0.3)]'
+                ? 'bg-purple-600/25 border-2 border-purple-500 text-white shadow-[0_0_15px_rgba(118,33,176,0.3)]'
                 : 'bg-[#181818] border border-[#262626] text-[#646973] hover:text-[#D7E2EA]'
             }`}
           >
-            <ImageIcon className={`w-5 h-5 ${activeTab === 'photos' ? 'text-pink-400' : ''}`} />
-            <span className="text-sm sm:text-base font-bold uppercase tracking-wider">
-              Photos
-            </span>
+            <ImageIcon className={`w-4 h-4 ${activeTab === 'photos' ? 'text-pink-400' : ''}`} />
+            <span className="text-xs sm:text-sm font-bold uppercase tracking-wider">Photos</span>
             {photoFiles.length > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-pink-900/60 text-pink-200 font-mono">
+              <span className="text-[11px] px-1.5 py-0.2 rounded-full bg-pink-900/60 text-pink-200 font-mono">
                 {photoFiles.length}
               </span>
             )}
@@ -726,67 +795,50 @@ export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
           {/* Tab 4: Audio */}
           <button
             onClick={() => setActiveTab('audio')}
-            className={`flex items-center gap-2 px-3.5 sm:px-5 py-2.5 rounded-2xl transition-all cursor-pointer ${
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-xl transition-all cursor-pointer ${
               activeTab === 'audio'
-                ? 'bg-purple-600/25 border-2 border-purple-500 text-white shadow-[0_0_20px_rgba(118,33,176,0.3)]'
+                ? 'bg-purple-600/25 border-2 border-purple-500 text-white shadow-[0_0_15px_rgba(118,33,176,0.3)]'
                 : 'bg-[#181818] border border-[#262626] text-[#646973] hover:text-[#D7E2EA]'
             }`}
           >
-            <Music className={`w-5 h-5 ${activeTab === 'audio' ? 'text-blue-400' : ''}`} />
-            <span className="text-sm sm:text-base font-bold uppercase tracking-wider">
-              Audio
-            </span>
+            <Music className={`w-4 h-4 ${activeTab === 'audio' ? 'text-blue-400' : ''}`} />
+            <span className="text-xs sm:text-sm font-bold uppercase tracking-wider">Audio</span>
             {audioFiles.length > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-900/60 text-blue-200 font-mono">
+              <span className="text-[11px] px-1.5 py-0.2 rounded-full bg-blue-900/60 text-blue-200 font-mono">
                 {audioFiles.length}
               </span>
             )}
           </button>
 
-          {/* Tab 5: Converter & Tools (Beside Audio) */}
+          {/* Tab 5: Converter */}
           <button
             onClick={() => setActiveTab('converter')}
-            className={`flex items-center gap-2 px-3.5 sm:px-5 py-2.5 rounded-2xl transition-all cursor-pointer ${
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-xl transition-all cursor-pointer ${
               activeTab === 'converter'
-                ? 'bg-purple-600/25 border-2 border-purple-500 text-white shadow-[0_0_20px_rgba(118,33,176,0.3)]'
+                ? 'bg-purple-600/25 border-2 border-purple-500 text-white shadow-[0_0_15px_rgba(118,33,176,0.3)]'
                 : 'bg-[#181818] border border-[#262626] text-[#646973] hover:text-[#D7E2EA]'
             }`}
           >
-            <RefreshCw className={`w-5 h-5 ${activeTab === 'converter' ? 'text-cyan-400' : ''}`} />
-            <span className="text-sm sm:text-base font-bold uppercase tracking-wider">
-              Converter
-            </span>
+            <Repeat className={`w-4 h-4 ${activeTab === 'converter' ? 'text-emerald-400' : ''}`} />
+            <span className="text-xs sm:text-sm font-bold uppercase tracking-wider">Converter</span>
           </button>
         </div>
-
-        {/* Audio mini playing status if playing */}
-        {currentAudioTrack && (
-          <div className="hidden lg:flex items-center gap-3 bg-[#0C0C0C] px-3 py-1.5 rounded-full border border-purple-500/30">
-            <button onClick={toggleAudio} className="p-1 text-purple-400 hover:text-white cursor-pointer">
-              {isPlayingAudio ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-            </button>
-            <span className="text-xs text-[#D7E2EA] truncate max-w-[140px] font-medium">
-              {currentAudioTrack.name}
-            </span>
-          </div>
-        )}
       </div>
 
       {/* ============================================================ */}
-      {/* 3. WORKSPACE TAB VIEWS */}
+      {/* 4. MAIN WORKSPACE / LOCKED STATE */}
       {/* ============================================================ */}
       {needsUnlock ? (
-        /* Password Wall if Locked */
-        <div className="flex-1 flex items-center justify-center p-6 bg-[#0C0C0C]">
-          <div className="bg-[#141414] border border-[#262626] rounded-3xl p-8 max-w-md w-full text-center shadow-2xl">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-3xl bg-purple-900/30 border border-purple-500/30 flex items-center justify-center text-purple-400">
+        <div className="flex-1 flex items-center justify-center p-4 bg-[#0C0C0C]">
+          <div className="bg-[#141220] border border-purple-500/30 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl text-center">
+            <div className="w-16 h-16 rounded-full bg-purple-900/30 text-purple-400 border border-purple-500/20 flex items-center justify-center mx-auto mb-4">
               <Lock className="w-8 h-8" />
             </div>
-            <h3 className="text-xl font-bold uppercase tracking-wider text-white mb-2">
+            <h2 className="text-xl font-bold uppercase tracking-wider text-white mb-2">
               Pad is Encrypted
-            </h3>
+            </h2>
             <p className="text-xs text-[#646973] mb-6 leading-relaxed">
-              This code is protected by client-side AES-GCM encryption. Enter the passphrase to decrypt.
+              This pad is encrypted client-side using Web Crypto AES-GCM 256-bit. Enter the decryption passphrase below to view and edit.
             </p>
 
             {unlockError && (
@@ -796,17 +848,33 @@ export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
             )}
 
             <form onSubmit={handleUnlockPad} className="space-y-4">
-              <input
-                type="password"
-                autoFocus
-                value={unlockPassword}
-                onChange={(e) => setUnlockPassword(e.target.value)}
-                placeholder="Enter decryption password..."
-                className="w-full bg-[#0C0C0C] border border-[#262626] rounded-xl px-4 py-3 text-sm text-[#D7E2EA] outline-none focus:border-purple-500"
-              />
+              <div className="relative">
+                <input
+                  type={showUnlockPass ? 'text' : 'password'}
+                  name="padly-decryption-key"
+                  id="padly-decryption-key"
+                  autoComplete="new-password"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-form-type="other"
+                  autoFocus
+                  value={unlockPassword}
+                  onChange={(e) => setUnlockPassword(e.target.value)}
+                  placeholder="Enter decryption passphrase..."
+                  className="w-full bg-[#0C0C0C] border border-[#262626] rounded-xl px-4 py-3 pr-10 text-sm text-[#D7E2EA] outline-none focus:border-purple-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowUnlockPass(!showUnlockPass)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white"
+                >
+                  {showUnlockPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+
               <button
                 type="submit"
-                className="w-full glow-btn py-3 rounded-xl text-white font-medium uppercase tracking-wider text-xs cursor-pointer"
+                className="w-full glow-btn py-3 rounded-xl text-white font-medium uppercase tracking-wider text-xs cursor-pointer shadow-lg"
               >
                 Decrypt & Open
               </button>
@@ -815,542 +883,425 @@ export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
         </div>
       ) : (
         <div className="flex-1 flex overflow-hidden bg-[#0C0C0C]">
-          {/* Main Tabs Workspace Area */}
+          {/* Main Content Area */}
           <div className="flex-1 flex flex-col overflow-hidden h-full">
-            {/* ============================================================ */}
-            {/* VIEW 1: NORMAL NOTEPAD (LEFT ALIGNED TEXT & CURSOR) */}
-            {/* ============================================================ */}
-          {activeTab === 'notepad' && (
-            <div className="flex-1 flex flex-col h-full overflow-hidden">
-              {/* Minimal Clean Formatting Bar */}
-              <div className="bg-[#141414] border-b border-[#262626] px-4 py-2 flex items-center justify-between text-xs select-none">
-                <div className="flex items-center gap-1 sm:gap-2">
-                  <button
-                    title="Bold"
-                    onClick={() => handleFormat('bold')}
-                    className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
-                  >
-                    <Bold className="w-4 h-4" />
-                  </button>
-                  <button
-                    title="Italic"
-                    onClick={() => handleFormat('italic')}
-                    className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
-                  >
-                    <Italic className="w-4 h-4" />
-                  </button>
-                  <button
-                    title="Strikethrough"
-                    onClick={() => handleFormat('strike')}
-                    className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
-                  >
-                    <Strikethrough className="w-4 h-4" />
-                  </button>
+            {/* VIEW 1: NOTEPAD (Left aligned text & styled caret) */}
+            {activeTab === 'notepad' && (
+              <div className="flex-1 flex flex-col h-full overflow-hidden">
+                {/* Clean Formatting Toolbar */}
+                <div className="bg-[#141414] border-b border-[#262626] px-3 sm:px-4 py-2 flex items-center justify-between text-xs select-none gap-2 overflow-x-auto">
+                  <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+                    <button
+                      title="Bold (Ctrl+B)"
+                      onClick={() => handleFormat('bold')}
+                      className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
+                    >
+                      <Bold className="w-4 h-4" />
+                    </button>
+                    <button
+                      title="Italic"
+                      onClick={() => handleFormat('italic')}
+                      className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
+                    >
+                      <Italic className="w-4 h-4" />
+                    </button>
+                    <button
+                      title="Strikethrough"
+                      onClick={() => handleFormat('strike')}
+                      className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
+                    >
+                      <Strikethrough className="w-4 h-4" />
+                    </button>
 
-                  <div className="h-4 w-px bg-[#262626] mx-1" />
+                    <div className="h-4 w-px bg-[#262626] mx-1" />
 
-                  <button
-                    title="Heading 1"
-                    onClick={() => handleFormat('h1')}
-                    className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
-                  >
-                    <Heading1 className="w-4 h-4" />
-                  </button>
-                  <button
-                    title="Heading 2"
-                    onClick={() => handleFormat('h2')}
-                    className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
-                  >
-                    <Heading2 className="w-4 h-4" />
-                  </button>
+                    <button
+                      title="Heading 1"
+                      onClick={() => handleFormat('h1')}
+                      className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
+                    >
+                      <Heading1 className="w-4 h-4" />
+                    </button>
+                    <button
+                      title="Heading 2"
+                      onClick={() => handleFormat('h2')}
+                      className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
+                    >
+                      <Heading2 className="w-4 h-4" />
+                    </button>
 
-                  <div className="h-4 w-px bg-[#262626] mx-1" />
+                    <div className="h-4 w-px bg-[#262626] mx-1" />
 
-                  <button
-                    title="Bullet List"
-                    onClick={() => handleFormat('ul')}
-                    className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
-                  >
-                    <List className="w-4 h-4" />
-                  </button>
-                  <button
-                    title="Checklist / To-Do"
-                    onClick={() => handleFormat('todo')}
-                    className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
-                  >
-                    <CheckSquare className="w-4 h-4" />
-                  </button>
-                  <button
-                    title="Code Block"
-                    onClick={() => handleFormat('code')}
-                    className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
-                  >
-                    <Code className="w-4 h-4" />
-                  </button>
-                  <button
-                    title="Quote"
-                    onClick={() => handleFormat('quote')}
-                    className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
-                  >
-                    <Quote className="w-4 h-4" />
-                  </button>
+                    <button
+                      title="Bullet List"
+                      onClick={() => handleFormat('ul')}
+                      className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
+                    >
+                      <List className="w-4 h-4" />
+                    </button>
+                    <button
+                      title="Checklist / To-Do"
+                      onClick={() => handleFormat('todo')}
+                      className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
+                    >
+                      <CheckSquare className="w-4 h-4" />
+                    </button>
+                    <button
+                      title="Code Block"
+                      onClick={() => handleFormat('code')}
+                      className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
+                    >
+                      <Code className="w-4 h-4" />
+                    </button>
+                    <button
+                      title="Quote"
+                      onClick={() => handleFormat('quote')}
+                      className="p-1.5 rounded hover:bg-white/10 text-[#D7E2EA] cursor-pointer"
+                    >
+                      <Quote className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                    <span className="hidden md:inline text-[#646973] whitespace-nowrap">
+                      {wordCount} words • {charCount} chars
+                    </span>
+
+                    <button
+                      onClick={() => setIsMarkdownPreviewActive(!isMarkdownPreviewActive)}
+                      className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-lg text-xs font-medium uppercase tracking-wider transition cursor-pointer shrink-0 ${
+                        isMarkdownPreviewActive
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-white/5 border border-[#262626] text-[#D7E2EA] hover:bg-white/10'
+                      }`}
+                      title="Toggle Rendered Preview"
+                    >
+                      {isMarkdownPreviewActive ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5 text-purple-400" />}
+                      <span>{isMarkdownPreviewActive ? 'Edit Text' : 'Preview'}</span>
+                    </button>
+                  </div>
                 </div>
 
-                {/* Right: Word count & SMALL ON-DEMAND PREVIEW ICON */}
-                <div className="flex items-center gap-3">
-                  <span className="hidden sm:inline text-[#646973]">
-                    {wordCount} words • {charCount} chars
-                  </span>
-
-                  {/* Toggle Preview On Demand */}
-                  <button
-                    onClick={() => setIsMarkdownPreviewActive(!isMarkdownPreviewActive)}
-                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium uppercase tracking-wider transition cursor-pointer ${
-                      isMarkdownPreviewActive
-                        ? 'bg-purple-600 text-white'
-                        : 'bg-white/5 border border-[#262626] text-[#D7E2EA] hover:bg-white/10'
-                    }`}
-                    title="Toggle Rendered Preview"
-                  >
-                    {isMarkdownPreviewActive ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5 text-purple-400" />}
-                    <span>{isMarkdownPreviewActive ? 'Edit Text' : 'Preview'}</span>
-                  </button>
+                {/* Editor Area: Left-Anchored, Comfortable Padding, Click to Focus at End */}
+                <div
+                  onClick={handleEditorAreaClick}
+                  className="flex-1 px-6 md:px-10 py-6 overflow-y-auto max-w-4xl min-w-0 w-full text-left cursor-text transition-all"
+                >
+                  {isMarkdownPreviewActive ? (
+                    <div className="p-6 bg-[#141414] rounded-2xl border border-[#262626] text-left">
+                      <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#262626]">
+                        <span className="text-xs font-semibold text-purple-300 uppercase tracking-wider">
+                          Rendered Preview
+                        </span>
+                        <button
+                          onClick={() => setIsMarkdownPreviewActive(false)}
+                          className="text-xs text-[#646973] hover:text-white cursor-pointer"
+                        >
+                          Return to Editor
+                        </button>
+                      </div>
+                      <div className="prose prose-invert max-w-none text-left leading-relaxed">
+                        {content || '*No content written yet.*'}
+                      </div>
+                    </div>
+                  ) : (
+                    <textarea
+                      ref={textareaRef}
+                      value={content}
+                      onChange={(e) => handleContentChange(e.target.value)}
+                      placeholder="Type anything here... Autosaves instantly. Switch to PDFs, Photos, Audio, or Converter above anytime."
+                      style={{ textAlign: 'left', direction: 'ltr' }}
+                      className="w-full h-full min-h-[500px] bg-transparent border-none outline-none resize-none text-[#D7E2EA] placeholder-[#4a4f58] text-[17px] leading-[1.7] selection:bg-purple-600/40 text-left placeholder:text-left block caret-purple-400 font-normal"
+                    />
+                  )}
                 </div>
               </div>
+            )}
 
-              {/* Editor Workspace: Left Aligned strictly from top-left */}
-              <div className="flex-1 p-6 md:p-8 overflow-y-auto max-w-5xl mx-auto w-full text-left">
-                {isMarkdownPreviewActive ? (
-                  <div className="p-6 bg-[#141414] rounded-2xl border border-[#262626] text-left">
-                    <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#262626]">
-                      <span className="text-xs font-semibold text-purple-300 uppercase tracking-wider">
-                        Rendered Preview
-                      </span>
-                      <button
-                        onClick={() => setIsMarkdownPreviewActive(false)}
-                        className="text-xs text-[#646973] hover:text-white cursor-pointer"
+            {/* VIEW 2: PDFS & FILES */}
+            {activeTab === 'files' && (
+              <div className="flex-1 p-6 md:p-8 overflow-y-auto max-w-4xl min-w-0 w-full flex flex-col gap-6 text-left">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xl font-bold uppercase tracking-wider text-white">
+                      PDFs & Document Storage
+                    </h3>
+                    <p className="text-xs text-[#646973]">
+                      Upload and manage PDF docs, archives, and files for code #{code}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {docFiles.length > 0 && (
+                      <a
+                        href={getApiUrl(`/api/pages/${encodeURIComponent(code)}/zip`)}
+                        download
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-900/30 border border-purple-500/30 text-purple-300 text-xs font-medium uppercase tracking-wider hover:bg-purple-800/40 transition"
                       >
-                        Return to Editor
-                      </button>
+                        <Archive className="w-3.5 h-3.5" /> Download ZIP
+                      </a>
+                    )}
+                    <button
+                      onClick={() => generalFileInputRef.current?.click()}
+                      className="glow-btn px-5 py-2 rounded-xl text-white text-xs font-medium uppercase tracking-wider flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5" /> Upload File
+                    </button>
+                    <input
+                      ref={generalFileInputRef}
+                      type="file"
+                      multiple
+                      onChange={(e) => e.target.files && handleUploadFiles(e.target.files)}
+                      className="hidden"
+                    />
+                  </div>
+                </div>
+
+                {/* Drag and Drop Zone & File List */}
+                {docFiles.length === 0 ? (
+                  <div
+                    onClick={() => generalFileInputRef.current?.click()}
+                    className="border-2 border-dashed border-[#262626] hover:border-purple-500/50 rounded-3xl p-12 text-center cursor-pointer transition flex flex-col items-center justify-center gap-3 bg-[#111111]/50"
+                  >
+                    <div className="w-14 h-14 rounded-2xl bg-purple-950/40 text-purple-400 border border-purple-500/20 flex items-center justify-center">
+                      <File className="w-7 h-7" />
                     </div>
-                    {renderMarkdownText(content || '*No content written yet.*')}
+                    <p className="text-sm font-semibold text-white">Drop PDF or documents here</p>
+                    <p className="text-xs text-[#646973]">Click to browse files from your computer</p>
                   </div>
                 ) : (
-                  <textarea
-                    ref={textareaRef}
-                    autoFocus
-                    value={content}
-                    onChange={(e) => handleContentChange(e.target.value)}
-                    placeholder="Type anything here... Autosaves instantly. Switch to PDFs, Photos, Audio, or Converter above anytime."
-                    style={{ textAlign: 'left', direction: 'ltr' }}
-                    className="w-full h-full min-h-[500px] bg-transparent border-none outline-none resize-none text-[#D7E2EA] placeholder-[#4a4f58] text-base sm:text-lg leading-relaxed selection:bg-purple-600/40 text-left placeholder:text-left block"
-                  />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {docFiles.map((file) => (
+                      <div
+                        key={file.id}
+                        className="p-4 rounded-2xl bg-[#141414] border border-[#262626] flex items-center justify-between gap-3 hover:border-purple-500/30 transition"
+                      >
+                        <div
+                          onClick={() => setSelectedFileForPreview(file)}
+                          className="flex items-center gap-3 truncate cursor-pointer flex-1"
+                        >
+                          <div className="w-10 h-10 rounded-xl bg-purple-900/30 text-purple-300 flex items-center justify-center flex-shrink-0">
+                            <File className="w-5 h-5" />
+                          </div>
+                          <div className="truncate">
+                            <p className="text-xs font-semibold text-white truncate">{file.filename}</p>
+                            <p className="text-[10px] text-[#646973]">{(file.size / 1024).toFixed(1)} KB</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <a
+                            href={file.url}
+                            download={file.filename}
+                            className="p-2 text-[#646973] hover:text-white rounded-lg hover:bg-white/10"
+                            title="Download"
+                          >
+                            <Download className="w-4 h-4" />
+                          </a>
+                          <button
+                            onClick={() => handleDeleteFile(file.id)}
+                            className="p-2 text-[#646973] hover:text-rose-400 rounded-lg hover:bg-white/10 cursor-pointer"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
-            </div>
-          )}
+            )}
 
-          {/* ============================================================ */}
-          {/* VIEW 2: PDFS & FILES */}
-          {/* ============================================================ */}
-          {activeTab === 'files' && (
-            <div className="flex-1 p-6 overflow-y-auto max-w-4xl mx-auto w-full flex flex-col gap-6 text-left">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-bold uppercase tracking-wider text-white">
-                    PDFs & Document Storage
-                  </h3>
-                  <p className="text-xs text-[#646973]">
-                    Upload and manage PDF docs, archives, and files for code #{code}
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {docFiles.length > 0 && (
-                    <a
-                      href={getApiUrl(`/api/pages/${encodeURIComponent(code)}/zip`)}
-                      download
-                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-900/30 border border-purple-500/30 text-purple-300 text-xs font-medium uppercase tracking-wider hover:bg-purple-800/40 transition"
-                    >
-                      <Archive className="w-3.5 h-3.5" /> Download ZIP
-                    </a>
-                  )}
-
+            {/* VIEW 3: PHOTOS */}
+            {activeTab === 'photos' && (
+              <div className="flex-1 p-6 md:p-8 overflow-y-auto max-w-4xl min-w-0 w-full flex flex-col gap-6 text-left">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xl font-bold uppercase tracking-wider text-white">
+                      Photos & Images Gallery
+                    </h3>
+                    <p className="text-xs text-[#646973]">
+                      Shared image gallery for pad #{code}
+                    </p>
+                  </div>
                   <button
                     onClick={() => generalFileInputRef.current?.click()}
                     className="glow-btn px-5 py-2 rounded-xl text-white text-xs font-medium uppercase tracking-wider flex items-center gap-1.5 cursor-pointer"
                   >
-                    <Upload className="w-3.5 h-3.5" /> Upload File
-                  </button>
-                  <input
-                    ref={generalFileInputRef}
-                    type="file"
-                    multiple
-                    onChange={(e) => e.target.files && handleUploadFiles(e.target.files)}
-                    className="hidden"
-                  />
-                </div>
-              </div>
-
-              {/* Upload Dropzone */}
-              <div
-                onClick={() => generalFileInputRef.current?.click()}
-                className="border-2 border-dashed border-[#262626] hover:border-purple-500/50 rounded-3xl p-8 text-center cursor-pointer bg-[#141414]/50 transition flex flex-col items-center justify-center gap-3"
-              >
-                <div className="p-3.5 rounded-2xl bg-purple-900/30 text-purple-400 border border-purple-500/20">
-                  <Upload className="w-6 h-6" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-white">
-                    Click or drag PDF & document files here
-                  </p>
-                  <p className="text-xs text-[#646973]">
-                    PDF, DOC, ZIP, TXT up to 50MB
-                  </p>
-                </div>
-              </div>
-
-              {/* Files Table / List */}
-              <div className="space-y-2">
-                {docFiles.length === 0 ? (
-                  <div className="text-center py-12 text-[#646973] text-sm">
-                    No PDF or document files uploaded yet.
-                  </div>
-                ) : (
-                  docFiles.map((file) => (
-                    <div
-                      key={file.id}
-                      className="flex items-center justify-between p-3.5 rounded-2xl bg-[#141414] border border-[#262626] hover:border-[#D7E2EA]/30 transition"
-                    >
-                      <div
-                        onClick={() => setSelectedFileForPreview(file)}
-                        className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
-                      >
-                        <div className="p-2.5 rounded-xl bg-purple-900/30 text-purple-400">
-                          <File className="w-5 h-5" />
-                        </div>
-                        <div className="truncate">
-                          <p className="text-sm font-semibold text-white truncate">
-                            {file.filename}
-                          </p>
-                          <p className="text-xs text-[#646973]">
-                            {formatFileSize(file.size)} • {new Date(file.created_at).toLocaleDateString()}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => setSelectedFileForPreview(file)}
-                          className="p-2 rounded-xl text-[#646973] hover:text-white hover:bg-white/10 cursor-pointer"
-                          title="Preview"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </button>
-                        <a
-                          href={file.url}
-                          download={file.filename}
-                          className="p-2 rounded-xl text-[#646973] hover:text-white hover:bg-white/10 cursor-pointer"
-                          title="Download"
-                        >
-                          <Download className="w-4 h-4" />
-                        </a>
-                        {!isReadOnlyMode && (
-                          <button
-                            onClick={() => handleDeleteFile(file.id)}
-                            className="p-2 rounded-xl text-[#646973] hover:text-rose-400 hover:bg-rose-950/20 cursor-pointer"
-                            title="Delete"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* ============================================================ */}
-          {/* VIEW 3: PHOTOS */}
-          {/* ============================================================ */}
-          {activeTab === 'photos' && (
-            <div className="flex-1 p-6 overflow-y-auto max-w-5xl mx-auto w-full flex flex-col gap-6 text-left">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-bold uppercase tracking-wider text-white">
-                    Photos & Image Gallery
-                  </h3>
-                  <p className="text-xs text-[#646973]">
-                    Upload and organize 3D renders, screenshots, and visual assets
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => photoFileInputRef.current?.click()}
-                    className="glow-btn px-5 py-2 rounded-xl text-white text-xs font-medium uppercase tracking-wider flex items-center gap-1.5 cursor-pointer"
-                  >
                     <Upload className="w-3.5 h-3.5" /> Upload Photos
                   </button>
-                  <input
-                    ref={photoFileInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={(e) => e.target.files && handleUploadFiles(e.target.files)}
-                    className="hidden"
-                  />
                 </div>
-              </div>
 
-              {/* Photos Grid */}
-              {photoFiles.length === 0 ? (
-                <div
-                  onClick={() => photoFileInputRef.current?.click()}
-                  className="border-2 border-dashed border-[#262626] hover:border-pink-500/50 rounded-3xl p-16 text-center cursor-pointer bg-[#141414]/50 transition flex flex-col items-center justify-center gap-3"
-                >
-                  <div className="p-4 rounded-2xl bg-pink-900/30 text-pink-400 border border-pink-500/20">
-                    <ImageIcon className="w-8 h-8" />
+                {photoFiles.length === 0 ? (
+                  <div
+                    onClick={() => generalFileInputRef.current?.click()}
+                    className="border-2 border-dashed border-[#262626] hover:border-pink-500/50 rounded-3xl p-12 text-center cursor-pointer transition flex flex-col items-center justify-center gap-3 bg-[#111111]/50"
+                  >
+                    <div className="w-14 h-14 rounded-2xl bg-pink-950/40 text-pink-400 border border-pink-500/20 flex items-center justify-center">
+                      <ImageIcon className="w-7 h-7" />
+                    </div>
+                    <p className="text-sm font-semibold text-white">Drop images or screenshots here</p>
+                    <p className="text-xs text-[#646973]">Supports PNG, JPG, GIF, WebP, SVG</p>
                   </div>
-                  <p className="text-base font-semibold text-white">
-                    No photos uploaded yet
-                  </p>
-                  <p className="text-xs text-[#646973]">
-                    Click here to upload PNG, JPG, GIF, WebP renders
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                  {photoFiles.map((photo) => (
-                    <div
-                      key={photo.id}
-                      className="group relative bg-[#141414] border border-[#262626] hover:border-pink-500/50 rounded-2xl overflow-hidden shadow-lg transition flex flex-col"
-                    >
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                    {photoFiles.map((photo) => (
                       <div
+                        key={photo.id}
+                        className="group relative aspect-square rounded-2xl overflow-hidden bg-[#141414] border border-[#262626] hover:border-pink-500/40 transition shadow-lg cursor-pointer"
                         onClick={() => setSelectedFileForPreview(photo)}
-                        className="h-44 w-full overflow-hidden cursor-pointer bg-[#0C0C0C]"
                       >
                         <img
                           src={photo.url}
                           alt={photo.filename}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                         />
-                      </div>
-                      <div className="p-3 flex items-center justify-between text-xs">
-                        <span className="truncate text-white font-medium max-w-[120px]">
-                          {photo.filename}
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => setSelectedFileForPreview(photo)}
-                            className="p-1 text-[#646973] hover:text-white cursor-pointer"
-                            title="Preview / OCR"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </button>
-                          <a
-                            href={photo.url}
-                            download={photo.filename}
-                            className="p-1 text-[#646973] hover:text-white cursor-pointer"
-                            title="Download"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </a>
-                          {!isReadOnlyMode && (
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition p-3 flex flex-col justify-end">
+                          <p className="text-xs text-white truncate font-medium">{photo.filename}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <a
+                              href={photo.url}
+                              download={photo.filename}
+                              onClick={(e) => e.stopPropagation()}
+                              className="p-1 rounded bg-black/60 text-white/80 hover:text-white"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </a>
                             <button
-                              onClick={() => handleDeleteFile(photo.id)}
-                              className="p-1 text-[#646973] hover:text-rose-400 cursor-pointer"
-                              title="Delete"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteFile(photo.id);
+                              }}
+                              className="p-1 rounded bg-black/60 text-rose-400 hover:text-rose-300"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
-                          )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
-          {/* ============================================================ */}
-          {/* VIEW 4: AUDIO */}
-          {/* ============================================================ */}
-          {activeTab === 'audio' && (
-            <div className="flex-1 p-6 overflow-y-auto max-w-4xl mx-auto w-full flex flex-col gap-6 text-left">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-bold uppercase tracking-wider text-white">
-                    Audio & Music Tracks
-                  </h3>
-                  <p className="text-xs text-[#646973]">
-                    Upload songs, soundtracks, and voice memos that play while you work
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2">
+            {/* VIEW 4: AUDIO */}
+            {activeTab === 'audio' && (
+              <div className="flex-1 p-6 md:p-8 overflow-y-auto max-w-4xl min-w-0 w-full flex flex-col gap-6 text-left">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xl font-bold uppercase tracking-wider text-white">
+                      Audio Recordings & Tracks
+                    </h3>
+                    <p className="text-xs text-[#646973]">
+                      Play and manage MP3, WAV, M4A audio files for pad #{code}
+                    </p>
+                  </div>
                   <button
-                    onClick={() => audioFileInputRef.current?.click()}
+                    onClick={() => generalFileInputRef.current?.click()}
                     className="glow-btn px-5 py-2 rounded-xl text-white text-xs font-medium uppercase tracking-wider flex items-center gap-1.5 cursor-pointer"
                   >
                     <Upload className="w-3.5 h-3.5" /> Upload Audio
                   </button>
-                  <input
-                    ref={audioFileInputRef}
-                    type="file"
-                    accept="audio/*"
-                    multiple
-                    onChange={(e) => e.target.files && handleUploadFiles(e.target.files)}
-                    className="hidden"
-                  />
                 </div>
-              </div>
 
-              {/* Audio Player Showcase Card */}
-              {currentAudioTrack && (
-                <div className="p-6 rounded-3xl bg-gradient-to-r from-purple-950/40 to-blue-950/30 border border-purple-500/40 shadow-xl">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className="p-3 rounded-2xl bg-purple-600/30 text-purple-300">
-                        <Music className="w-6 h-6 animate-pulse" />
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-purple-300 font-bold uppercase tracking-widest">
-                          Active Audio Track
-                        </span>
-                        <h4 className="text-lg font-bold text-white truncate max-w-md">
-                          {currentAudioTrack.name}
-                        </h4>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={toggleAudio}
-                        className="glow-btn p-3 rounded-full text-white cursor-pointer"
-                      >
-                        {isPlayingAudio ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Seek Bar */}
-                  <div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={audioDuration || 100}
-                      value={audioCurrentTime}
-                      onChange={(e) => {
-                        const val = Number(e.target.value);
-                        setAudioCurrentTime(val);
-                        if (audioRef.current) audioRef.current.currentTime = val;
-                      }}
-                      className="w-full h-1.5 bg-[#262626] rounded-full appearance-none cursor-pointer accent-purple-500"
-                    />
-                    <div className="flex justify-between text-xs text-[#646973] font-mono mt-1">
-                      <span>{formatTime(audioCurrentTime)}</span>
-                      <span>{formatTime(audioDuration)}</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Audio Track List */}
-              <div className="space-y-2">
                 {audioFiles.length === 0 ? (
                   <div
-                    onClick={() => audioFileInputRef.current?.click()}
-                    className="border-2 border-dashed border-[#262626] hover:border-blue-500/50 rounded-3xl p-16 text-center cursor-pointer bg-[#141414]/50 transition flex flex-col items-center justify-center gap-3"
+                    onClick={() => generalFileInputRef.current?.click()}
+                    className="border-2 border-dashed border-[#262626] hover:border-blue-500/50 rounded-3xl p-12 text-center cursor-pointer transition flex flex-col items-center justify-center gap-3 bg-[#111111]/50"
                   >
-                    <div className="p-4 rounded-2xl bg-blue-900/30 text-blue-400 border border-blue-500/20">
-                      <Music className="w-8 h-8" />
+                    <div className="w-14 h-14 rounded-2xl bg-blue-950/40 text-blue-400 border border-blue-500/20 flex items-center justify-center">
+                      <Music className="w-7 h-7" />
                     </div>
-                    <p className="text-base font-semibold text-white">
-                      No audio tracks uploaded yet
-                    </p>
-                    <p className="text-xs text-[#646973]">
-                      Upload MP3, WAV, FLAC, AAC tracks to listen while writing
-                    </p>
+                    <p className="text-sm font-semibold text-white">Drop audio or voice notes here</p>
+                    <p className="text-xs text-[#646973]">Supports MP3, WAV, AAC, OGG, M4A</p>
                   </div>
                 ) : (
-                  audioFiles.map((track) => (
-                    <div
-                      key={track.id}
-                      className="flex items-center justify-between p-3.5 rounded-2xl bg-[#141414] border border-[#262626] hover:border-blue-500/30 transition"
-                    >
-                      <div
-                        onClick={() => playTrack({ id: track.id, name: track.filename, url: track.url, size: track.size })}
-                        className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
-                      >
-                        <div className="p-2.5 rounded-xl bg-blue-900/30 text-blue-400">
-                          <Play className="w-4 h-4" />
-                        </div>
-                        <div className="truncate">
-                          <p className="text-sm font-semibold text-white truncate">
-                            {track.filename}
-                          </p>
-                          <p className="text-xs text-[#646973]">
-                            {formatFileSize(track.size)}
-                          </p>
-                        </div>
-                      </div>
+                  <div className="space-y-3">
+                    {audioFiles.map((audio) => {
+                      const isPlaying = activeAudioPlaying === audio.id;
+                      return (
+                        <div
+                          key={audio.id}
+                          className="p-4 rounded-2xl bg-[#141414] border border-[#262626] flex items-center justify-between gap-4 hover:border-blue-500/40 transition"
+                        >
+                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <button
+                              onClick={() => {
+                                const el = audioElementsRef.current[audio.id];
+                                if (!el) return;
+                                if (isPlaying) {
+                                  el.pause();
+                                  setActiveAudioPlaying(null);
+                                } else {
+                                  Object.values(audioElementsRef.current).forEach(a => a.pause());
+                                  el.play();
+                                  setActiveAudioPlaying(audio.id);
+                                }
+                              }}
+                              className="w-10 h-10 rounded-xl bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center transition cursor-pointer flex-shrink-0 shadow-md"
+                            >
+                              {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+                            </button>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-semibold text-white truncate">{audio.filename}</p>
+                              <audio
+                                ref={(el) => {
+                                  if (el) {
+                                    audioElementsRef.current[audio.id] = el;
+                                    el.onended = () => setActiveAudioPlaying(null);
+                                  }
+                                }}
+                                src={audio.url}
+                                preload="metadata"
+                                className="hidden"
+                              />
+                            </div>
+                          </div>
 
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => playTrack({ id: track.id, name: track.filename, url: track.url, size: track.size })}
-                          className="px-3 py-1.5 rounded-xl bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 text-xs font-medium uppercase tracking-wider cursor-pointer"
-                        >
-                          Play Track
-                        </button>
-                        <a
-                          href={track.url}
-                          download={track.filename}
-                          className="p-2 rounded-xl text-[#646973] hover:text-white cursor-pointer"
-                          title="Download"
-                        >
-                          <Download className="w-4 h-4" />
-                        </a>
-                        {!isReadOnlyMode && (
-                          <button
-                            onClick={() => handleDeleteFile(track.id)}
-                            className="p-2 rounded-xl text-[#646973] hover:text-rose-400 cursor-pointer"
-                            title="Delete"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))
+                          <div className="flex items-center gap-2">
+                            <a
+                              href={audio.url}
+                              download={audio.filename}
+                              className="p-2 text-[#646973] hover:text-white rounded-lg hover:bg-white/10"
+                            >
+                              <Download className="w-4 h-4" />
+                            </a>
+                            <button
+                              onClick={() => handleDeleteFile(audio.id)}
+                              className="p-2 text-[#646973] hover:text-rose-400 rounded-lg hover:bg-white/10 cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
-            </div>
-          )}
+            )}
 
-          {/* ============================================================ */}
-          {/* VIEW 5: CONVERTER & DOCUMENT TOOLS (BESIDE AUDIO) */}
-          {/* ============================================================ */}
-          {activeTab === 'converter' && (
-            <ConverterStudio
-              padCode={code}
-              onSaveToPad={async (file: File) => {
-                const formData = new FormData();
-                formData.append('files', file);
-                await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}/files`), {
-                  method: 'POST',
-                  body: formData
-                });
-                await loadFiles();
-              }}
-            />
-          )}
+            {/* VIEW 5: CONVERTER STUDIO */}
+            {activeTab === 'converter' && (
+              <ConverterStudio
+                padCode={code}
+                onSaveToPad={async (file: File) => {
+                  const formData = new FormData();
+                  formData.append('files', file);
+                  await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}/files`), {
+                    method: 'POST',
+                    body: formData,
+                  });
+                  await loadFiles();
+                  showToast('success', 'Converted file saved to pad');
+                }}
+              />
+            )}
           </div>
 
-          {/* Right Side Synchronized Chat & Audio/Video Call */}
+          {/* Right Side Synchronized Chat Panel */}
           <PeerChatAndCall
             code={code}
             clientId={clientIdRef.current}
@@ -1358,13 +1309,52 @@ export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
             presenceCount={presenceCount}
             isOpen={showChatPanel}
             onToggleOpen={() => setShowChatPanel(!showChatPanel)}
-            onOpenMeet={() => setShowMeetModal(true)}
+            onOpenMeet={() => startCall('video')}
+            onFileUpload={handleUploadFiles}
           />
         </div>
       )}
 
       {/* ============================================================ */}
-      {/* 4. MODALS & POPUPS */}
+      {/* 5. PERSISTENT CALL WINDOWS (Floating Mini & FullScreen Grid) */}
+      {/* ============================================================ */}
+      <MiniCallWindow />
+      <FullScreenCallModal />
+
+      {/* Floating Speed Dial Action Button (Hidden when chat is open) */}
+      <SpeedDialCallButton
+        isChatOpen={showChatPanel}
+        onOpenChat={() => setShowChatPanel(true)}
+      />
+
+      {/* Toast Notification Container */}
+      <ToastContainer />
+
+      {/* Command Palette (Ctrl+K) */}
+      <CommandPalette
+        isOpen={showCommandPalette}
+        onClose={() => setShowCommandPalette(false)}
+        onSwitchTab={setActiveTab}
+        onToggleChat={() => setShowChatPanel(prev => !prev)}
+        onOpenLock={() => setShowLockModal(true)}
+        onOpenHistory={() => {
+          loadVersions();
+          setShowVersionsModal(true);
+        }}
+        onOpenSettings={() => setShowSettingsModal(true)}
+        onShare={() => setShowShareModal(true)}
+        onTogglePreview={() => setIsMarkdownPreviewActive(prev => !prev)}
+        onNavigateCode={onNavigateCode}
+      />
+
+      {/* Shortcuts Help Modal */}
+      <ShortcutsHelpModal
+        isOpen={showShortcutsModal}
+        onClose={() => setShowShortcutsModal(false)}
+      />
+
+      {/* ============================================================ */}
+      {/* 6. MODALS & POPUPS */}
       {/* ============================================================ */}
       <ShareModal
         code={code}
@@ -1390,10 +1380,11 @@ export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
           const res = await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}/restore`), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ versionId: id })
+            body: JSON.stringify({ versionId: id }),
           });
           const data = await res.json();
           if (data.page) setContent(data.page.content);
+          showToast('info', 'Version restored');
         }}
         isReadOnly={isReadOnlyMode}
       />
@@ -1409,8 +1400,9 @@ export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
           await fetch(getApiUrl(`/api/pages/${encodeURIComponent(code)}`), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ expires_at: targetExpiresAt, burn_after_reading: burn })
+            body: JSON.stringify({ expires_at: targetExpiresAt, burn_after_reading: burn }),
           });
+          showToast('success', 'Settings updated');
         }}
         onExport={(format) => {
           if (format === 'pdf') window.print();
@@ -1439,26 +1431,7 @@ export const NotepadWorkspace: React.FC<NotepadWorkspaceProps> = ({
         onApplyText={(newText) => handleContentChange(newText)}
       />
 
-      {/* Google Meet / Zoom Style Multi-Person Meet Room with Screen Sharing & Live Captions */}
-      <MeetRoomModal
-        code={code}
-        clientId={clientIdRef.current}
-        userName="You"
-        isOpen={showMeetModal}
-        onClose={() => setShowMeetModal(false)}
-        ws={wsRef.current}
-        onSendChatMessage={(text) => {
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({
-              type: 'chat_message',
-              text,
-              senderName: 'You'
-            }));
-          }
-        }}
-      />
-
-      {/* Lightbox / Preview Modal for Photos & PDFs */}
+      {/* Lightbox / Preview Modal */}
       {selectedFileForPreview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
           <div className="bg-[#141414] border border-[#262626] rounded-3xl p-5 max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl relative">
